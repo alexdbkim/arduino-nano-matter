@@ -1,0 +1,12 @@
+{
+  "C_Cpp.default.compilerPath": "/opt/homebrew/bin/arm-none-eabi-gcc",
+  "C_Cpp.default.intelliSenseMode": "linux-gcc-arm",
+  "files.associations": {
+    "*.s": "arm",
+    "*.S": "arm",
+    "*.ld": "linkerscript"
+  },
+  "cortex-debug.armToolchainPath": "/opt/homebrew/bin",
+  "cortex-debug.gdbPath": "/opt/homebrew/bin/arm-none-eabi-gdb",
+  "cortex-debug.JLinkGDBServerPath": "/opt/homebrew/bin/JLinkGDBServerCLExe"
+}
