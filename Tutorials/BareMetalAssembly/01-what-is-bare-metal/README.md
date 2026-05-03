@@ -6,9 +6,32 @@ No code in this session — just pictures and ideas. Sessions 2 and 3 still set 
 
 ---
 
+## A tour of the Nano Matter board
+
+Before we zoom into chips and registers, look at the board itself. The Arduino Nano Matter is more than just one chip — it's a small PCB with several distinct components wired together:
+
+![Arduino Nano Matter board interfaces](../images/Arduino-Nano-Matter-interfaces.webp)
+
+What's labelled there:
+
+- **USB-C connector** — power in, and the only cable you need to program *and* debug the board.
+- **ATSAMD11 / D14A USB bridge** — a small Microchip MCU that turns USB into the SWD / serial signals the main chip understands. This is what your Mac actually talks to; it then forwards everything to the brain of the board.
+- **MGM240S module (ARM Cortex-M33, Matter + BLE)** — the brain. Inside that metal can is the Silicon Labs **EFR32MG24** SoC plus a crystal, a few passives, and the antenna matching network. *This is the chip we're learning to program.*
+- **2.4 GHz antenna** — the printed/chip antenna that the EFR32MG24's radio drives for Matter and BLE traffic. We won't touch the radio in this series, but it's there.
+- **RGB LED** — a single package with three LEDs (red, green, blue) wired to PC1 / PC2 / PC3 on the EFR32MG24. We'll start blinking it in Session 7.
+- **User pushbutton (`USR`)** — wired to PA0, active low.
+- **Reset button** — small one near the USB-C connector. Restarts the program from scratch.
+- **Header pins** — 14 digital + 8 analog around the edges. We won't use them in this series.
+
+> **Jargon:** **GPIO** = General-Purpose Input/Output — a pin you can configure as either an input you read or an output you drive high/low. The Nano Matter exposes 22 of them.
+
+> **Jargon:** **Active low** means the LED turns ON when the pin is at 0 V (LOW), and OFF at 3.3 V (HIGH). It's wired this way so the chip *sinks* current rather than sourcing it. Just remember: 0 = on, 1 = off.
+
+---
+
 ## A microcontroller is a tiny computer
 
-Your laptop has a CPU, some RAM, some storage (SSD), and a bunch of peripherals (Wi-Fi, USB, screen). A **microcontroller** (MCU) is the same idea, shrunk into one chip:
+Your laptop has a CPU, some RAM, some storage (SSD), and a bunch of peripherals (Wi-Fi, USB, screen). A **microcontroller** (MCU) is the same idea, shrunk into one chip. Inside the MGM240S module on the board is the EFR32MG24, and *inside* that single piece of silicon you'll find:
 
 ```
      ┌──────────────────────────────────────────┐
@@ -23,13 +46,14 @@ Your laptop has a CPU, some RAM, some storage (SSD), and a bunch of peripherals 
      │              │      │   │  (256kB) │     │
      │              │      │   └──────────┘     │
      │              │      │   ┌──────────┐     │
-     │              │      │──▶│ GPIO/USART│    │  ← peripherals = "pins" you can wiggle
+     │              │      │──▶│GPIO/USART│     │  ← peripherals = "pins" you can wiggle
+     │              │      │   │  /RADIO  │     │
      │              └──────┘   └──────────┘     │
      │                                          │
      └──────────────────────────────────────────┘
 ```
 
-The Nano Matter board adds a USB-C connector, a debug chip (J-Link OB), an LED, a button, and some passive components. That's it. There is no operating system. There is no Python interpreter. There isn't even a C library unless you bring one yourself.
+There is no operating system. There is no Python interpreter. There isn't even a C library unless you bring one yourself. When you press reset, the CPU starts executing whatever bytes you flashed — and nothing else.
 
 > **Jargon:** **MCU** = microcontroller unit. We'll use "MCU", "chip", and "microcontroller" interchangeably.
 
@@ -71,25 +95,6 @@ Two facts to remember:
 If you've seen older ARM tutorials with `mov r0, #1` outside a `.thumb` block, that's classic ARM. We won't be using that. Everything in this series is Thumb.
 
 > **Gotcha:** If you ever assemble a program and the chip immediately crashes / hardfaults, the #1 cause for beginners is forgetting to mark a function as Thumb. We'll fix this once and forget about it in Session 4.
-
----
-
-## A tour of the Nano Matter
-
-Find these on the board (you'll need them later):
-
-- **USB-C connector** — power, programming, and debugging all happen through here.
-- **Reset button** — the small one. Press it and your program restarts from scratch.
-- **User pushbutton (BTN_BUILTIN)** — labelled `USR` on most board photos. Wired to GPIO pin **PA0**, active low (pressed = 0).
-- **On-board RGB LED** — three LEDs in one package:
-  - Red on **PC1** (active low — write 0 to turn ON)
-  - Green on **PC2** (active low)
-  - Blue on **PC3** (active low)
-- The headers around the edge are 14 digital pins + 8 analog pins, but we won't touch those until much later (if at all).
-
-> **Jargon:** **GPIO** = General-Purpose Input/Output. A pin you can configure to be either an input you read, or an output you drive high or low. The Nano Matter has 22 of them brought out to the headers.
-
-> **Jargon:** **Active low** means the LED turns ON when the pin is at 0 V (LOW), and OFF at 3.3 V (HIGH). It's wired this way so the chip *sinks* current rather than sourcing it. Don't worry about why for now; just remember: 0 = on, 1 = off.
 
 ---
 
