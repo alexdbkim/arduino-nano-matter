@@ -10,24 +10,9 @@ No code in this session — just pictures and ideas. Sessions 2 and 3 still set 
 
 Your laptop has a CPU, some RAM, some storage (SSD), and a bunch of peripherals (Wi-Fi, USB, screen). A **microcontroller** (MCU) is the same idea, shrunk into one chip:
 
-```
-     ┌──────────────────────────────────────────┐
-     │             EFR32MG24 (the chip)         │
-     │                                          │
-     │   ┌──────┐   ┌──────┐   ┌──────────┐     │
-     │   │ CPU  │──▶│ Bus  │──▶│   Flash  │     │  ← your program lives here
-     │   │ M33  │   │      │   │ (1536kB) │     │
-     │   └──────┘   │      │   └──────────┘     │
-     │              │      │   ┌──────────┐     │
-     │              │      │──▶│   RAM    │     │  ← variables, stack
-     │              │      │   │  (256kB) │     │
-     │              │      │   └──────────┘     │
-     │              │      │   ┌──────────┐     │
-     │              │      │──▶│ GPIO/USART│    │  ← peripherals = "pins" you can wiggle
-     │              └──────┘   └──────────┘     │
-     │                                          │
-     └──────────────────────────────────────────┘
-```
+![Arduino Nano Matter board interfaces](../images/Arduino-Nano-Matter-interfaces.webp)
+
+Inside that little black square in the middle (the EFR32MG24 module) live a CPU, flash memory (1536 kB — where your program goes), RAM (256 kB — where your variables and stack live), and a pile of peripherals (GPIO, USART, timers, radio…) all wired together on an internal bus.
 
 The Nano Matter board adds a USB-C connector, a debug chip (J-Link OB), an LED, a button, and some passive components. That's it. There is no operating system. There is no Python interpreter. There isn't even a C library unless you bring one yourself.
 
