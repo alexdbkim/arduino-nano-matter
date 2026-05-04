@@ -2,27 +2,31 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug (J-Link)",
+      "name": "Debug (CMSIS-DAP / OpenOCD)",
       "type": "cortex-debug",
       "request": "launch",
       "cwd": "${workspaceFolder}",
       "executable": "${workspaceFolder}/main.elf",
-      "servertype": "jlink",
-      "device": "EFR32MG24BxxxF1536",
-      "interface": "swd",
+      "servertype": "openocd",
+      "configFiles": [
+        "interface/cmsis-dap.cfg",
+        "target/efm32s2.cfg"
+      ],
       "runToEntryPoint": "reset_handler",
       "preLaunchTask": "build",
       "showDevDebugOutput": "raw"
     },
     {
-      "name": "Attach (J-Link)",
+      "name": "Attach (CMSIS-DAP / OpenOCD)",
       "type": "cortex-debug",
       "request": "attach",
       "cwd": "${workspaceFolder}",
       "executable": "${workspaceFolder}/main.elf",
-      "servertype": "jlink",
-      "device": "EFR32MG24BxxxF1536",
-      "interface": "swd"
+      "servertype": "openocd",
+      "configFiles": [
+        "interface/cmsis-dap.cfg",
+        "target/efm32s2.cfg"
+      ]
     }
   ]
 }

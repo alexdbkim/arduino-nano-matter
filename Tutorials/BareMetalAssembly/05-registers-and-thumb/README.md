@@ -106,10 +106,11 @@ reset_handler:
 Flash it, then attach with GDB (Session 12 for the full walkthrough — for now, this works):
 
 ```sh
-JLinkGDBServer -device EFR32MG24BxxxF1536 -if SWD &
+make flash
+make gdbserver &                         # OpenOCD listens on :3333
 arm-none-eabi-gdb main.elf
-(gdb) target remote :2331
-(gdb) monitor reset
+(gdb) target extended-remote :3333
+(gdb) monitor reset halt
 (gdb) continue
 ^C
 (gdb) x/wx 0x20000000

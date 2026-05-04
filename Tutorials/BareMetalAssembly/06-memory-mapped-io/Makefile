@@ -1,8 +1,11 @@
 # Minimal Makefile for an ARM Cortex-M33 Thumb assembly program.
 # Usage:
 #   make           build main.elf and main.bin
-#   make flash     flash main.bin to the Nano Matter via J-Link
+#   make flash     flash main.elf to the Nano Matter via the on-board CMSIS-DAP probe
+#   make gdbserver run OpenOCD as a GDB server (port 3333) without flashing
 #   make clean     remove build artefacts
+#
+# Prerequisites: arm-none-eabi-* toolchain and openocd (Homebrew: `brew install open-ocd`).
 
 PREFIX  := arm-none-eabi-
 AS      := $(PREFIX)as
@@ -10,8 +13,12 @@ LD      := $(PREFIX)ld
 OBJCOPY := $(PREFIX)objcopy
 OBJDUMP := $(PREFIX)objdump
 
-# J-Link device name for the Nano Matter's MGM240SD22VNA (EFR32MG24Bxxx, 1536kB flash).
-JLINK_DEVICE ?= EFR32MG24BxxxF1536
+# OpenOCD config for the Nano Matter:
+#   - the on-board ATSAMD11 USB bridge speaks CMSIS-DAP,
+#   - EFR32MG24 is part of the EFM32 Series-2 target family.
+# If your OpenOCD is older and lacks `target/efm32s2.cfg`, fall back to `target/efm32.cfg`.
+OPENOCD       ?= openocd
+OPENOCD_FLAGS ?= -f interface/cmsis-dap.cfg -f target/efm32s2.cfg
 
 ASFLAGS := -mcpu=cortex-m33 -mthumb -g
 LDFLAGS := -T linker.ld --no-warn-rwx-segments
@@ -19,32 +26,24 @@ LDFLAGS := -T linker.ld --no-warn-rwx-segments
 all: main.bin
 
 main.o: main.s
-	$(AS) $(ASFLAGS) $< -o $@
+$(AS) $(ASFLAGS) $< -o $@
 
 main.elf: main.o linker.ld
-	$(LD) $(LDFLAGS) main.o -o $@
+$(LD) $(LDFLAGS) main.o -o $@
 
 main.bin: main.elf
-	$(OBJCOPY) -O binary $< $@
+$(OBJCOPY) -O binary $< $@
 
 disasm: main.elf
-	$(OBJDUMP) -d $<
+$(OBJDUMP) -d $<
 
-flash: main.bin
-	@echo "device $(JLINK_DEVICE)"          > flash.jlink
-	@echo "si 1"                           >> flash.jlink
-	@echo "speed 4000"                     >> flash.jlink
-	@echo "connect"                        >> flash.jlink
-	@echo "r"                              >> flash.jlink
-	@echo "h"                              >> flash.jlink
-	@echo "loadbin main.bin 0x08000000"    >> flash.jlink
-	@echo "r"                              >> flash.jlink
-	@echo "g"                              >> flash.jlink
-	@echo "qc"                             >> flash.jlink
-	JLinkExe -CommandFile flash.jlink
-	@rm -f flash.jlink
+flash: main.elf
+$(OPENOCD) $(OPENOCD_FLAGS) -c "program $< verify reset exit"
+
+gdbserver: main.elf
+$(OPENOCD) $(OPENOCD_FLAGS)
 
 clean:
-	rm -f main.o main.elf main.bin flash.jlink
+rm -f main.o main.elf main.bin
 
-.PHONY: all clean flash disasm
+.PHONY: all clean flash disasm gdbserver

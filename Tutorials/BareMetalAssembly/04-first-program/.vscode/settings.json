@@ -8,5 +8,5 @@
   },
   "cortex-debug.armToolchainPath": "/opt/homebrew/bin",
   "cortex-debug.gdbPath": "/opt/homebrew/bin/arm-none-eabi-gdb",
-  "cortex-debug.JLinkGDBServerPath": "/opt/homebrew/bin/JLinkGDBServerCLExe"
+  "cortex-debug.openocdPath": "/opt/homebrew/bin/openocd"
 }
