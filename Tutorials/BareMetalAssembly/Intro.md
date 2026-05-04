@@ -33,13 +33,13 @@ If you can copy-paste a command into a terminal and you've heard the word "binar
 - 1× USB-C cable (data, not just power).
 - A computer running **macOS**.
 
-The Nano Matter has a built-in **J-Link OB** debugger, so you can flash and debug straight over USB — no extra hardware required.
+The Nano Matter has an on-board **CMSIS-DAP debug probe** (firmware running on the small ATSAMD11 USB bridge), so you can flash and debug straight over USB — no extra hardware required.
 
 ### Software (we'll install this together in Session 2)
 
 - **GNU Arm Embedded toolchain** — `arm-none-eabi-gcc`, `as`, `ld`, `objcopy`, `gdb` (via Homebrew).
-- **Segger J-Link tools** — `JLinkExe` and `JLinkGDBServer` for flashing and debugging.
-- A plain text editor of your choice.
+- **OpenOCD (Silicon Labs fork)** — installed automatically with the Silicon Labs Arduino core via the Arduino IDE's Boards Manager. Vanilla Homebrew openocd cannot program the EFR32MG24's flash; the Arduino-bundled fork ships the required `target/efm32s2_g23.cfg`. Acts as both flasher and GDB server, talks to the on-board CMSIS-DAP probe over USB.
+- **VS Code** + **Cortex-Debug** + **C/C++** + **ARM** extensions — for breakpoints, register/memory inspection, and graphical single-stepping.
 
 > **No Arduino IDE. No Simplicity Studio.** Everything is command-line. This is on purpose — when you build it yourself, you understand it.
 
@@ -97,7 +97,7 @@ You're meant to **type the code yourself**, not copy-paste. That's where the lea
 | # | Title | What you'll do | What you'll learn |
 |---|---|---|---|
 | 1 | What is bare metal? | Tour the Nano Matter, draw a picture of CPU + memory + peripherals | Mental model: MCU vs. PC, what "no OS" really means, why assembly exists |
-| 2 | Toolchain setup (macOS) | Install `arm-none-eabi-*` and J-Link tools; assemble a do-nothing program | What an assembler, linker, and object file are; verifying your setup |
+| 2 | Toolchain setup (macOS) | Install `arm-none-eabi-*` and OpenOCD; assemble a do-nothing program; wire up VS Code for breakpoint debugging | What an assembler, linker, and object file are; how OpenOCD bridges your Mac and the on-board CMSIS-DAP probe |
 | 3 | Memory map & the vector table | Read the MGM240S memory map; lay out flash and RAM regions on paper | Why the **first 8 bytes** of flash are the initial stack pointer and the reset handler |
 | 4 | Your first program | Write a 4-instruction Thumb program that loops forever; build `.elf` → `.bin`; flash it | The full pipeline `assemble → link → objcopy → flash`; minimal linker script |
 | 5 | Registers & the Thumb ISA | Hand-trace a tiny program on paper, then verify on the chip | `r0`–`r15`, `SP`, `LR`, `PC`, `xPSR`; `mov`, `add`, `sub`, `ldr`, `str` |
@@ -107,7 +107,7 @@ You're meant to **type the code yourself**, not copy-paste. That's where the lea
 | 9 | Reading a button | Configure an input pin with a pull-up; LED mirrors the user button | Input direction, pull-ups, polling |
 | 10 | Subroutines & AAPCS | Refactor blink into `delay_ms` and `led_toggle` functions | `bl` / `bx lr`, prologue/epilogue, argument passing in `r0`–`r3`, callee-saved registers |
 | 11 | Interrupts | Add a SysTick handler and a GPIO interrupt; remove all polling | The NVIC, populating the vector table, what an ISR is |
-| 12 | GDB + capstone project | Connect `arm-none-eabi-gdb` to `JLinkGDBServer`; break, step, inspect; build the final mini-project | Live debugging; an interrupt-driven button-controlled RGB pattern, all in assembly |
+| 12 | GDB + capstone project | Connect `arm-none-eabi-gdb` to OpenOCD; break, step, inspect; build the final mini-project | Live debugging; an interrupt-driven button-controlled RGB pattern, all in assembly |
 
 ---
 

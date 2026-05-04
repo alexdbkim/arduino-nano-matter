@@ -65,10 +65,10 @@ You can verify the write with GDB:
 
 ```sh
 make flash
-JLinkGDBServer -device EFR32MG24BxxxF1536 -if SWD &
+make gdbserver &
 arm-none-eabi-gdb main.elf
-(gdb) target remote :2331
-(gdb) monitor reset
+(gdb) target extended-remote :3333
+(gdb) monitor reset halt
 (gdb) continue
 ^C
 (gdb) x/wx 0x40008064
