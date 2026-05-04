@@ -38,7 +38,7 @@ The Nano Matter has an on-board **CMSIS-DAP debug probe** (firmware running on t
 ### Software (we'll install this together in Session 2)
 
 - **GNU Arm Embedded toolchain** — `arm-none-eabi-gcc`, `as`, `ld`, `objcopy`, `gdb` (via Homebrew).
-- **OpenOCD** — `brew install open-ocd`. Acts as both flasher and GDB server, talks to the on-board CMSIS-DAP probe over USB.
+- **OpenOCD (Silicon Labs fork)** — installed automatically with the Silicon Labs Arduino core via the Arduino IDE's Boards Manager. Vanilla Homebrew openocd cannot program the EFR32MG24's flash; the Arduino-bundled fork ships the required `target/efm32s2_g23.cfg`. Acts as both flasher and GDB server, talks to the on-board CMSIS-DAP probe over USB.
 - **VS Code** + **Cortex-Debug** + **C/C++** + **ARM** extensions — for breakpoints, register/memory inspection, and graphical single-stepping.
 
 > **No Arduino IDE. No Simplicity Studio.** Everything is command-line. This is on purpose — when you build it yourself, you understand it.

@@ -91,51 +91,73 @@ You should see something like `arm-none-eabi-gcc (Arm GNU Toolchain ...) 13.x.x`
 
 ---
 
-## Step 3 — install OpenOCD
+## Step 3 — install OpenOCD (Silicon Labs build)
+
+This is the part that surprised me when I first tried it: **vanilla Homebrew `openocd` does not know how to program the EFR32MG24's flash.** It can connect via CMSIS-DAP, but the bundled `target/efm32.cfg` doesn't recognise the chip's Series-2 flash controller, so `program ...` fails. The Arduino IDE works around this by shipping a *forked* OpenOCD with a custom `target/efm32s2_g23.cfg` script — and that's the one we'll use.
+
+The easiest way to install it is to install the **Silicon Labs Arduino core** once via the Arduino IDE. The IDE downloads the right OpenOCD as part of the core install. After that, you can throw the IDE away and just use the OpenOCD binary it left behind.
+
+1. Install the Arduino IDE if you don't have it: <https://www.arduino.cc/en/software>.
+2. Open it, go to **Boards Manager** (left sidebar), search **"Silicon Labs"**, and install the Silicon Labs core.
+3. Quit the IDE. The forked OpenOCD now lives at:
+   ```
+   ~/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/
+   ```
+
+> **Why not vanilla Homebrew openocd?** If you're curious, run `openocd -f interface/cmsis-dap.cfg -f target/efm32.cfg`. It connects fine, but `program main.elf` fails with a flash-driver error because OpenOCD's upstream `efm32.cfg` doesn't ship the EFR32MG24 (xG24 / "g23") flash bits. The Silicon Labs fork patches that in.
+
+### Verify the install
 
 ```sh
-brew install open-ocd
+SILABS_OOCD=~/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static
+"$SILABS_OOCD/bin/openocd" --version
+ls "$SILABS_OOCD/share/openocd/scripts/target/efm32s2_g23.cfg"
 ```
 
-> **Heads up — formula name has a hyphen:** Homebrew's formula is `open-ocd`, not `openocd`. The installed binary is just `openocd`.
+You should see the OpenOCD banner and a path to `efm32s2_g23.cfg`. The Makefile in every code session sets `SILABS_OOCD` to that path automatically.
 
-Verify:
+### Plug in the board and confirm OpenOCD can see it
 
-```sh
-openocd --version
-```
-
-You should see `Open On-Chip Debugger 0.12.0` or newer. **Older versions may not have `target/efm32.cfg`** — see the troubleshooting section below if that's you.
-
-### Plug in the board, and confirm OpenOCD can see it
-
-Connect the Nano Matter via USB-C. Then:
+Connect the Nano Matter via USB-C. **Use a known-data cable** — a power-only USB-C cable will look identical and silently not enumerate the USB device. Then:
 
 ```sh
-openocd -f interface/cmsis-dap.cfg -f target/efm32.cfg
+"$SILABS_OOCD/bin/openocd" \
+  -s "$SILABS_OOCD/share/openocd/scripts" \
+  -f interface/cmsis-dap.cfg \
+  -f target/efm32s2_g23.cfg
 ```
 
 You should see something like:
 
 ```
-Open On-Chip Debugger 0.12.0
-...
+Open On-Chip Debugger 0.12.0+dev-...
 Info : CMSIS-DAP: SWD supported
-Info : CMSIS-DAP: FW Version = 2.x.x
+Info : CMSIS-DAP: FW Version = ...
 Info : SWD DPIDR 0x6ba02477
-Info : [efr32.cpu] Cortex-M33 r0p4 ...
+Info : [efm32s2.cpu] Cortex-M33 ...
 Info : Listening on port 3333 for gdb connections
-Info : Listening on port 4444 for telnet connections
 ```
 
 🎉 — OpenOCD is talking to the chip. Hit **Ctrl-C** to stop it for now.
 
-> **Gotcha:** if you see `Error: unable to find CMSIS-DAP device`, your USB cable may be power-only. Use a known-data USB-C cable. Confirm the board enumerates as a CMSIS-DAP probe with:
-> ```sh
-> system_profiler SPUSBDataType | grep -i -A2 'arduino\|cmsis'
-> ```
+### Troubleshooting "unable to find a matching CMSIS-DAP device"
 
-> **Gotcha:** if you see `Can't find target/efm32.cfg`, your OpenOCD is older than 0.11. Run `brew upgrade open-ocd` and try again. The `efm32.cfg` script auto-detects the EFR32MG24 (Series 2) on first connect — there is no separate `efm32s2.cfg`.
+This means the macOS USB stack isn't seeing the on-board probe at all. OpenOCD never gets to send a single byte. Things to try, in order:
+
+1. **Replace the USB-C cable.** Use one you've successfully used for data before (e.g. with a phone). Power-only cables are the #1 cause.
+2. **Plug directly into the Mac**, not through a hub or dock.
+3. **Check that the Mac actually sees a USB device:**
+   ```sh
+   ioreg -p IOUSB -l | grep -E '"USB Product Name"|"USB Vendor Name"'
+   ```
+   You should see an entry mentioning *Silicon Labs*, *Arduino*, *CMSIS-DAP*, or *EFM32*. If nothing matches, the board isn't enumerating — the OS is the problem, not OpenOCD.
+4. **Check serial-port enumeration:**
+   ```sh
+   ls /dev/cu.usbmodem*
+   ```
+   The Nano Matter's CDC serial port appears here when the chip is alive. Missing means the EFR32MG24 isn't running — try pressing the reset button.
+5. **Try the `hid` backend explicitly.** Cortex-Debug / OpenOCD on macOS can be picky about which CMSIS-DAP transport is used. Add `-c "cmsis_dap_backend hid"` after the interface config.
+6. **Inspect with USB Prober** (built into Apple's "Additional Tools for Xcode") to see whether macOS is failing to fully attach the device.
 
 ---
 
@@ -314,9 +336,13 @@ This is the one that matters. It tells **Cortex-Debug** to spin up `openocd` (CM
       "cwd": "${workspaceFolder}",
       "executable": "${workspaceFolder}/main.elf",
       "servertype": "openocd",
+      "serverpath": "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd",
+      "searchDir": [
+        "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/share/openocd/scripts"
+      ],
       "configFiles": [
         "interface/cmsis-dap.cfg",
-        "target/efm32.cfg"
+        "target/efm32s2_g23.cfg"
       ],
       "runToEntryPoint": "reset_handler",
       "preLaunchTask": "build",
@@ -329,9 +355,13 @@ This is the one that matters. It tells **Cortex-Debug** to spin up `openocd` (CM
       "cwd": "${workspaceFolder}",
       "executable": "${workspaceFolder}/main.elf",
       "servertype": "openocd",
+      "serverpath": "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd",
+      "searchDir": [
+        "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/share/openocd/scripts"
+      ],
       "configFiles": [
         "interface/cmsis-dap.cfg",
-        "target/efm32.cfg"
+        "target/efm32s2_g23.cfg"
       ]
     }
   ]
@@ -341,7 +371,8 @@ This is the one that matters. It tells **Cortex-Debug** to spin up `openocd` (CM
 Key fields:
 
 - **`servertype: openocd`** — Cortex-Debug starts `openocd` for us (port 3333).
-- **`configFiles`** — the OpenOCD configs to load. `interface/cmsis-dap.cfg` selects the on-board probe; `target/efm32.cfg` covers the entire EFM32/EFR32 family and auto-detects the EFR32MG24.
+- **`serverpath` + `searchDir`** — point Cortex-Debug at the **Silicon Labs–forked OpenOCD** that the Arduino core installed. Vanilla Homebrew openocd does not include `target/efm32s2_g23.cfg` and cannot program the EFR32MG24's flash.
+- **`configFiles`** — the OpenOCD configs to load. `interface/cmsis-dap.cfg` selects the on-board probe; `target/efm32s2_g23.cfg` is the Silicon Labs Series-2 / xG23/xG24 target script that knows how to drive the chip's flash controller.
 - **`runToEntryPoint`** — pause execution at this symbol after flashing. For us, that's `reset_handler` (we define it in Session 4).
 - **`preLaunchTask: build`** — runs the `build` task in `tasks.json` before each debug session, so you never debug stale binaries.
 - **Launch vs. Attach** — *Launch* flashes a fresh binary and resets. *Attach* connects to whatever is already running on the chip (handy if you're chasing a bug that only appears after some uptime).
@@ -382,7 +413,7 @@ This is the loop you'll use from Session 4 onward:
 2. Edit `main.s`.
 3. **F5** to debug. VS Code:
    - runs `make` (`preLaunchTask: build`),
-   - launches `openocd` with `interface/cmsis-dap.cfg` + `target/efm32.cfg`,
+   - launches the Silicon Labs OpenOCD with `interface/cmsis-dap.cfg` + `target/efm32s2_g23.cfg`,
    - launches `arm-none-eabi-gdb` and connects it to `:3333`,
    - flashes the freshly-built `main.elf`,
    - resets the chip and halts at `reset_handler`.
@@ -397,9 +428,10 @@ This is the loop you'll use from Session 4 onward:
 | Symptom | Likely cause / fix |
 |---|---|
 | `arm-none-eabi-as: command not found` | Toolchain not on `$PATH`. Open a fresh terminal, or `echo 'export PATH="$(brew --prefix)/bin:$PATH"' >> ~/.zshrc`. |
-| `openocd: command not found` | `brew install open-ocd` (note the hyphen in the formula name). |
-| OpenOCD: *"unable to find CMSIS-DAP device"* | Wrong USB cable (power-only) or the board didn't enumerate. Try another cable; check `system_profiler SPUSBDataType \| grep -i cmsis`. |
-| OpenOCD: *"Can't find target/efm32.cfg"* | OpenOCD older than 0.12. `brew upgrade open-ocd` or fall back to `target/efm32.cfg`. |
+| `openocd: command not found` (in VS Code) | `cortex-debug.openocdPath` is wrong. Set it to `~/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd`. |
+| OpenOCD: *"unable to find a matching CMSIS-DAP device"* | macOS USB stack doesn't see the board. Try a different USB-C cable (power-only cables are the #1 cause), plug directly into the Mac (no hub), and run `ioreg -p IOUSB -l \| grep -E '"USB Product Name"'` to confirm enumeration. |
+| OpenOCD: *"Can't find target/efm32s2_g23.cfg"* | You're running vanilla Homebrew `openocd`. Use the Silicon Labs–forked binary at `~/Library/Arduino15/.../0.12.0-arduino1-static/bin/openocd` with its bundled scripts dir. |
+| OpenOCD: *"target was not examined"* / flash programming fails | You're using `target/efm32.cfg` from upstream OpenOCD. The EFR32MG24 needs `target/efm32s2_g23.cfg` from the Silicon Labs fork. |
 | OpenOCD: *"Error: timed out while waiting for target halted"* | Code is stuck in a tight bootloop or an exception. Power-cycle the board, then try with `-c "init; reset halt"` to halt at vector reset before doing anything else. |
 | Cortex-Debug: *"Failed to launch OpenOCD"* | Wrong path in `cortex-debug.openocdPath`. Run `which openocd` and paste the result. |
 | Breakpoints don't hit | You're debugging stale code. Make sure `preLaunchTask: build` is set, or re-run **build** manually. Also check the Cortex-Debug **gdb-server** terminal for "Flash download skipped" warnings. |
@@ -410,10 +442,10 @@ This is the loop you'll use from Session 4 onward:
 
 ## What you should remember
 
-- The whole toolchain is **`brew install --cask gcc-arm-embedded`** + **`brew install open-ocd`** + VS Code with **C/C++**, **Cortex-Debug**, **ARM** extensions.
+- The toolchain is **`brew install --cask gcc-arm-embedded`** + the **Silicon Labs Arduino core** (which installs the right OpenOCD fork at `~/Library/Arduino15/...`) + VS Code with **C/C++**, **Cortex-Debug**, **ARM** extensions.
 - Building an `.elf` is **assemble** (`as`) → **link** (`ld`). Always pass `-mcpu=cortex-m33 -mthumb` to the assembler.
 - The Nano Matter's debug probe is the on-board **CMSIS-DAP**, not J-Link. We talk to it with **OpenOCD**, which doubles as the GDB server on `:3333`.
-- Standard OpenOCD invocation: `openocd -f interface/cmsis-dap.cfg -f target/efm32.cfg`.
+- Standard OpenOCD invocation: `openocd -s "$SILABS_OOCD/share/openocd/scripts" -f interface/cmsis-dap.cfg -f target/efm32s2_g23.cfg` — using the **Silicon Labs–forked openocd**, not Homebrew's.
 - VS Code talks to the chip through **Cortex-Debug → OpenOCD → CMSIS-DAP (SAMD11) → Cortex-M33**. Each layer is a separate process you can debug independently.
 - `launch.json` is the file you'll come back to most. The two configs that matter are **Launch** (flash + reset + halt) and **Attach** (don't touch the chip, just hook into whatever is running).
 - The first session where we flash a real chip is **Session 4**. Until then we just inspect what we build with `objdump`.
