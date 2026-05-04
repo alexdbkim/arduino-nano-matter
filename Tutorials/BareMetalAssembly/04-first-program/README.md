@@ -135,19 +135,24 @@ Plug in the Nano Matter via USB-C. Then:
 make flash
 ```
 
-Behind the scenes, this runs `JLinkExe` with a small command script that:
+Behind the scenes, this runs the **Silicon Labs–forked OpenOCD** (the one the Arduino core installs) with the CMSIS-DAP interface and the `efm32s2_g23.cfg` target script. It connects through the on-board ATSAMD11 USB bridge, halts the core, erases the relevant flash sectors, programs `main.elf` into flash starting at `0x08000000`, verifies the write, and resets the chip so your program starts running.
 
-1. Connects to the target (`device EFR32MG24BxxxF1536`),
-2. Resets and halts the core,
-3. Erases the chip,
-4. Loads `main.bin` into flash at `0x08000000`,
-5. Resets and runs.
+The single OpenOCD command underneath is:
 
-If you see `O.K.` near the end, your program is running. The LED won't blink — your program is just looping forever. That's expected. We'll add the blink in Session 7.
+```sh
+SILABS_OOCD=~/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static
+"$SILABS_OOCD/bin/openocd" -s "$SILABS_OOCD/share/openocd/scripts" \
+    -f interface/cmsis-dap.cfg -f target/efm32s2_g23.cfg \
+    -c "init; reset_config srst_nogate; reset halt; program main.hex verify; reset; exit"
+```
 
-> **Gotcha:** if `JLinkExe` complains about the device name, check the J-Link tools' "supported devices" list (`JLinkExe -CommandFile -listdevices`) for the exact part number marked on your board (e.g., `EFR32MG24BxxxF1536` or similar).
+If you see `** Programming Finished **` and `** Verified OK **` near the end, your program is running. The LED won't blink — your program is just looping forever. That's expected. We'll add the blink in Session 7.
 
-> **Try it:** open another terminal and run `JLinkExe`, then at the prompt type `connect`, then `mem32 0x08000000 4` to read the first 4 words of flash. They should match the bytes you saw with `hexdump`.
+> **Gotcha:** if OpenOCD complains *"Can't find target/efm32s2_g23.cfg"*, you're running vanilla Homebrew `openocd` instead of the Silicon Labs–forked one. Install the Silicon Labs Arduino core (Session 02) and use the binary at `~/Library/Arduino15/.../0.12.0-arduino1-static/bin/openocd`.
+
+> **Gotcha:** if OpenOCD says *"unable to find a matching CMSIS-DAP device"*, the macOS USB stack doesn't see the on-board probe. Try a different USB-C cable (must be data, not power-only), plug directly into the Mac (no hub), and confirm enumeration with `ioreg -p IOUSB -l | grep -E '"USB Product Name"'`.
+
+> **Try it:** open another terminal and run `make gdbserver`. Then in a third terminal, `arm-none-eabi-gdb main.elf`, and at the `(gdb)` prompt: `target extended-remote :3333`, `monitor reset halt`, `x/2wx 0x08000000`. The first 4 words of flash should match the bytes you saw with `hexdump`.
 
 ---
 
@@ -155,7 +160,7 @@ If you see `O.K.` near the end, your program is running. The LED won't blink —
 
 - A bare-metal program needs **(1)** a vector table at `0x08000000` and **(2)** a reset handler.
 - The vector table's first word is the initial SP; the second is the reset handler address **with the Thumb bit set**.
-- Build pipeline: `as` → `ld` (with linker script) → `objcopy -O binary` → flash with `JLinkExe`.
+- Build pipeline: `as` → `ld` (with linker script) → `objcopy -O binary` → flash with **OpenOCD** over the on-board CMSIS-DAP probe.
 - The `KEEP(...)` directive prevents dead-stripping of the vector table.
 
 ---

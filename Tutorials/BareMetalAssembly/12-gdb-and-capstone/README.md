@@ -4,9 +4,9 @@
 
 ---
 
-## Part 1 — debugging with GDB over J-Link
+## Part 1 — debugging with GDB over OpenOCD
 
-The Nano Matter has an on-board **J-Link OB**. We've been using `JLinkExe` to flash. Now we'll use its sibling, `JLinkGDBServer`, to talk to a real `arm-none-eabi-gdb` session over a TCP socket. From there we can:
+The Nano Matter has an on-board **CMSIS-DAP probe** (firmware running on the small ATSAMD11 USB bridge). We've been using **OpenOCD** to flash. The same `openocd` process is also a full GDB server — leave it running and connect `arm-none-eabi-gdb` to it. From there we can:
 
 - pause and resume the CPU,
 - set breakpoints at instructions or symbols,
@@ -16,13 +16,16 @@ The Nano Matter has an on-board **J-Link OB**. We've been using `JLinkExe` to fl
 
 ### Start the GDB server
 
-In one terminal:
+In one terminal, from this folder:
 
 ```sh
-JLinkGDBServer -device EFR32MG24BxxxF1536 -if SWD -speed 4000
+make gdbserver
+# which runs (roughly):
+# openocd -s "$SILABS_OOCD/share/openocd/scripts" \
+#         -f interface/cmsis-dap.cfg -f target/efm32s2_g23.cfg
 ```
 
-You should see `Connected to target` and then it sits there waiting for a client on port `2331`.
+OpenOCD prints something like `Listening on port 3333 for gdb connections` and sits there waiting for a client.
 
 ### Connect GDB
 
@@ -35,14 +38,16 @@ arm-none-eabi-gdb main.elf
 At the `(gdb)` prompt:
 
 ```
-(gdb) target remote :2331
-(gdb) monitor reset                # halt + reset the chip
+(gdb) target extended-remote :3333
+(gdb) monitor reset halt           # halt + reset the chip
 (gdb) load                         # flash main.elf via the GDB server
 (gdb) break reset_handler
 (gdb) continue
 ```
 
 The chip resets, runs your code up to the first instruction of `reset_handler`, and stops. Now the fun starts.
+
+> **Why `extended-remote`?** With plain `target remote`, GDB will detach if the target dies. `extended-remote` keeps the session alive and lets you re-`run` / re-`load` without reconnecting. OpenOCD supports both.
 
 ### Useful commands
 
@@ -61,7 +66,10 @@ The chip resets, runs your code up to the first instruction of `reset_handler`, 
 | `delete 1`                 | delete breakpoint 1 |
 | `print/x $r0`              | print register `r0` in hex |
 | `set $r0 = 0x42`           | poke a register |
-| `monitor reset`            | reset the chip (J-Link command) |
+| `monitor reset halt`       | reset the chip and halt at vector reset (OpenOCD command) |
+| `monitor reset run`        | reset the chip and let it run free |
+| `monitor halt` / `monitor resume` | manual halt and resume |
+| `monitor flash write_image erase main.bin 0x08000000` | re-flash without `load` |
 
 > **Try it:** set a breakpoint on `gpio_even_handler`, press the user button, and watch GDB pop you into the handler. Then `info registers` to see the CPU state right at the moment of the interrupt.
 
@@ -106,7 +114,7 @@ Each of these reproduces a real bug a beginner would write. Catching them with G
 
 ## What you should remember
 
-- `JLinkGDBServer` ↔ `arm-none-eabi-gdb` over port **2331** is the universal Cortex-M debug stack.
+- **OpenOCD** ↔ `arm-none-eabi-gdb` over port **3333** is the universal Cortex-M debug stack on the Nano Matter (the on-board ATSAMD11 speaks CMSIS-DAP, OpenOCD speaks both ends).
 - `stepi`, `nexti`, `info registers`, and `x/...` are the four commands you'll use 90% of the time.
 - A `.gdbinit` saves typing — keep one per project.
 - You can now write, flash, and debug a fully interrupt-driven program in **pure ARM Thumb assembly**, on real silicon.

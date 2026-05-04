@@ -6,6 +6,31 @@ You'll do this once. Future sessions assume these tools are on your `$PATH`.
 
 ---
 
+## How the Nano Matter is debugged
+
+Before we install anything, here's the actual data path between your Mac and the EFR32MG24:
+
+```
+   ┌─────────┐  USB-C   ┌──────────────┐  SWD  ┌──────────────┐
+   │  macOS  │ ───────▶ │   ATSAMD11   │ ────▶ │  EFR32MG24   │
+   │ openocd │          │  (CMSIS-DAP) │       │  Cortex-M33  │
+   └─────────┘          └──────────────┘       └──────────────┘
+        ▲                        ▲
+        │                        │
+   talks GDB-RSP             on-board USB
+   on TCP :3333              bridge running
+                             CMSIS-DAP firmware
+```
+
+Two important consequences:
+
+1. **No external probe is needed.** The little ATSAMD11 chip on the back of the board is a debug probe. You only ever plug in one USB-C cable.
+2. **The probe is CMSIS-DAP, not Segger J-Link.** This means our flasher / debugger is **OpenOCD**, *not* `JLinkExe` / `JLinkGDBServer`. Internally, OpenOCD speaks CMSIS-DAP to the SAMD11, the SAMD11 speaks SWD to the EFR32MG24, and you get a GDB server out the other end on port `3333`.
+
+> **Aside (optional probe):** You *can* attach an external Segger J-Link probe to the Nano Matter's SWD pads if you really want one. Everything in this series will work either way — only the OpenOCD config files / the GDB-server port change. The default workflow assumes the on-board CMSIS-DAP because that's what the board ships with.
+
+---
+
 ## What we're installing
 
 The full bare-metal stack we'll use through the rest of this series:
@@ -18,13 +43,12 @@ The full bare-metal stack we'll use through the rest of this series:
 | `arm-none-eabi-objcopy` | Object copier | Strips the `.elf` down to a raw `.bin` we can flash |
 | `arm-none-eabi-objdump` / `nm` / `readelf` | Inspectors | Let us look at what we just built |
 | `arm-none-eabi-gdb` | Debugger | Steps through code on the real chip (Sessions 11 & 12) |
-| `JLinkExe` | Flasher | Writes our `.bin` into the chip's flash via USB |
-| `JLinkGDBServer` | Debug bridge | Connects GDB (and VS Code) to the J-Link OB on the board |
-| **VS Code** + **Cortex-Debug** + **C/C++** extensions | IDE | Editor, build tasks, **breakpoints, register & memory views, single-step, watch** |
+| **`openocd`** | Flasher **and** GDB server | Talks to the on-board CMSIS-DAP probe, programs flash, exposes GDB on `:3333` |
+| **VS Code** + **Cortex-Debug** + **C/C++** + **ARM** extensions | IDE | Editor, build tasks, **breakpoints, register & memory views, single-step, watch** |
 
 > **Jargon:** **arm-none-eabi** is the name of the cross-toolchain we use. *arm* = target architecture. *none* = no operating system on the target. *eabi* = the binary calling convention. Every tool name starts with this prefix.
 
-> **Heads up — debug bridge:** The exact debug-probe firmware shipped on the on-board ATSAMD11/D14A chip varies by Nano Matter revision. Most boards ship with a J-Link OB image, which is what these instructions assume. If your board enumerates as a CMSIS-DAP probe instead, you'll use OpenOCD or pyOCD in place of `JLinkExe` / `JLinkGDBServer` — the shape of the workflow is identical, only the tool names change. Plug the board in and run `system_profiler SPUSBDataType | grep -A 4 -i 'segger\|cmsis\|j-link'` to find out.
+> **Jargon:** **CMSIS-DAP** = Arm's vendor-neutral debug-probe protocol. **SWD** = Serial Wire Debug, the 2-wire signalling between probe and target. **OpenOCD** = "Open On-Chip Debugger", an open-source program that bridges the two and exposes a GDB server.
 
 ---
 
@@ -67,29 +91,73 @@ You should see something like `arm-none-eabi-gcc (Arm GNU Toolchain ...) 13.x.x`
 
 ---
 
-## Step 3 — install the Segger J-Link tools
+## Step 3 — install OpenOCD (Silicon Labs build)
 
-The Nano Matter has a J-Link OB-class debugger built in. Install Segger's tools:
+This is the part that surprised me when I first tried it: **vanilla Homebrew `openocd` does not know how to program the EFR32MG24's flash.** It can connect via CMSIS-DAP, but the bundled `target/efm32.cfg` doesn't recognise the chip's Series-2 flash controller, so `program ...` fails. The Arduino IDE works around this by shipping a *forked* OpenOCD with a custom `target/efm32s2_g23.cfg` script — and that's the one we'll use.
+
+The easiest way to install it is to install the **Silicon Labs Arduino core** once via the Arduino IDE. The IDE downloads the right OpenOCD as part of the core install. After that, you can throw the IDE away and just use the OpenOCD binary it left behind.
+
+1. Install the Arduino IDE if you don't have it: <https://www.arduino.cc/en/software>.
+2. Open it, go to **Boards Manager** (left sidebar), search **"Silicon Labs"**, and install the Silicon Labs core.
+3. Quit the IDE. The forked OpenOCD now lives at:
+   ```
+   ~/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/
+   ```
+
+> **Why not vanilla Homebrew openocd?** If you're curious, run `openocd -f interface/cmsis-dap.cfg -f target/efm32.cfg`. It connects fine, but `program main.elf` fails with a flash-driver error because OpenOCD's upstream `efm32.cfg` doesn't ship the EFR32MG24 (xG24 / "g23") flash bits. The Silicon Labs fork patches that in.
+
+### Verify the install
 
 ```sh
-brew install --cask segger-jlink
+SILABS_OOCD=~/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static
+"$SILABS_OOCD/bin/openocd" --version
+ls "$SILABS_OOCD/share/openocd/scripts/target/efm32s2_g23.cfg"
 ```
 
-This adds two commands we care about:
+You should see the OpenOCD banner and a path to `efm32s2_g23.cfg`. The Makefile in every code session sets `SILABS_OOCD` to that path automatically.
 
-- `JLinkExe` — interactive flasher / register-poker.
-- `JLinkGDBServer` — a daemon that exposes the J-Link OB to GDB over TCP port `2331`. **VS Code talks to this through the Cortex-Debug extension.**
+### Plug in the board and confirm OpenOCD can see it
 
-Verify:
+Connect the Nano Matter via USB-C. **Use a known-data cable** — a power-only USB-C cable will look identical and silently not enumerate the USB device. Then:
 
 ```sh
-JLinkExe -? 2>&1 | head -3
-JLinkGDBServer -? 2>&1 | head -3
+"$SILABS_OOCD/bin/openocd" \
+  -s "$SILABS_OOCD/share/openocd/scripts" \
+  -f interface/cmsis-dap.cfg \
+  -f target/efm32s2_g23.cfg
 ```
 
-You should see Segger's banner from each.
+You should see something like:
 
-> **License:** the macOS J-Link tools are free for use with on-board J-Link OB debuggers like the one on the Nano Matter. Just accept the license prompt the first time you run `JLinkExe`.
+```
+Open On-Chip Debugger 0.12.0+dev-...
+Info : CMSIS-DAP: SWD supported
+Info : CMSIS-DAP: FW Version = ...
+Info : SWD DPIDR 0x6ba02477
+Info : [efm32s2.cpu] Cortex-M33 ...
+Info : Listening on port 3333 for gdb connections
+```
+
+🎉 — OpenOCD is talking to the chip. Hit **Ctrl-C** to stop it for now.
+
+### Troubleshooting "unable to find a matching CMSIS-DAP device"
+
+This means the macOS USB stack isn't seeing the on-board probe at all. OpenOCD never gets to send a single byte. Things to try, in order:
+
+1. **Replace the USB-C cable.** Use one you've successfully used for data before (e.g. with a phone). Power-only cables are the #1 cause.
+2. **Plug directly into the Mac**, not through a hub or dock.
+3. **Check that the Mac actually sees a USB device:**
+   ```sh
+   ioreg -p IOUSB -l | grep -E '"USB Product Name"|"USB Vendor Name"'
+   ```
+   You should see an entry mentioning *Silicon Labs*, *Arduino*, *CMSIS-DAP*, or *EFM32*. If nothing matches, the board isn't enumerating — the OS is the problem, not OpenOCD.
+4. **Check serial-port enumeration:**
+   ```sh
+   ls /dev/cu.usbmodem*
+   ```
+   The Nano Matter's CDC serial port appears here when the chip is alive. Missing means the EFR32MG24 isn't running — try pressing the reset button.
+5. **Try the `hid` backend explicitly.** Cortex-Debug / OpenOCD on macOS can be picky about which CMSIS-DAP transport is used. Add `-c "cmsis_dap_backend hid"` after the interface config.
+6. **Inspect with USB Prober** (built into Apple's "Additional Tools for Xcode") to see whether macOS is failing to fully attach the device.
 
 ---
 
@@ -182,7 +250,7 @@ Install these three:
 | Extension | ID | Why |
 |---|---|---|
 | **C/C++** | `ms-vscode.cpptools` | Editor smarts for `.c`/`.h` (we'll use a tiny bit later) |
-| **Cortex-Debug** | `marus25.cortex-debug` | The hero — graphical debugging of Cortex-M chips, integrates with J-Link |
+| **Cortex-Debug** | `marus25.cortex-debug` | The hero — graphical debugging of Cortex-M chips, integrates with OpenOCD |
 | **ARM** | `dan-c-underwood.arm` | Syntax highlighting for `.s` / `.S` ARM assembly |
 
 From the command line:
@@ -193,7 +261,7 @@ code --install-extension marus25.cortex-debug
 code --install-extension dan-c-underwood.arm
 ```
 
-> **Cortex-Debug** wraps `arm-none-eabi-gdb` and `JLinkGDBServer` and gives you breakpoints, the **Cortex Peripherals** view (live register values for every peripheral!), and a memory inspector. This is the single biggest quality-of-life win you'll get in this series.
+> **Cortex-Debug** wraps `arm-none-eabi-gdb` and `openocd` and gives you breakpoints, the **Cortex Peripherals** view (live register values for every peripheral!), and a memory inspector. This is the single biggest quality-of-life win you'll get in this series.
 
 ---
 
@@ -214,10 +282,10 @@ VS Code looks for a `.vscode/` folder in whichever folder you open. We'll create
     "*.S": "arm",
     "*.ld": "linkerscript"
   },
-  // Cortex-Debug needs to know which GDB to launch and where to find J-Link tools.
+  // Cortex-Debug needs to know which GDB to launch and where OpenOCD lives.
   "cortex-debug.armToolchainPath": "/opt/homebrew/bin",
   "cortex-debug.gdbPath": "/opt/homebrew/bin/arm-none-eabi-gdb",
-  "cortex-debug.JLinkGDBServerPath": "/opt/homebrew/bin/JLinkGDBServerCLExe"
+  "cortex-debug.openocdPath": "/opt/homebrew/bin/openocd"
 }
 ```
 
@@ -255,34 +323,46 @@ Now **⌘⇧B** runs `make`. **⌘⇧P → "Tasks: Run Task" → flash** writes 
 
 ### `.vscode/launch.json` — the debugger
 
-This is the one that matters. It tells **Cortex-Debug** to spin up `JLinkGDBServer`, attach `arm-none-eabi-gdb`, flash your `.elf`, and stop at `reset_handler` so you can step from instruction zero.
+This is the one that matters. It tells **Cortex-Debug** to spin up `openocd` (CMSIS-DAP + EFM32 config), attach `arm-none-eabi-gdb`, flash your `.elf`, and stop at `reset_handler` so you can step from instruction zero.
 
 ```jsonc
 {
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug (J-Link)",
+      "name": "Debug (CMSIS-DAP / OpenOCD)",
       "type": "cortex-debug",
       "request": "launch",
       "cwd": "${workspaceFolder}",
       "executable": "${workspaceFolder}/main.elf",
-      "servertype": "jlink",
-      "device": "EFR32MG24BxxxF1536",
-      "interface": "swd",
+      "servertype": "openocd",
+      "serverpath": "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd",
+      "searchDir": [
+        "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/share/openocd/scripts"
+      ],
+      "configFiles": [
+        "interface/cmsis-dap.cfg",
+        "target/efm32s2_g23.cfg"
+      ],
       "runToEntryPoint": "reset_handler",
       "preLaunchTask": "build",
       "showDevDebugOutput": "raw"
     },
     {
-      "name": "Attach (J-Link)",
+      "name": "Attach (CMSIS-DAP / OpenOCD)",
       "type": "cortex-debug",
       "request": "attach",
       "cwd": "${workspaceFolder}",
       "executable": "${workspaceFolder}/main.elf",
-      "servertype": "jlink",
-      "device": "EFR32MG24BxxxF1536",
-      "interface": "swd"
+      "servertype": "openocd",
+      "serverpath": "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd",
+      "searchDir": [
+        "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/share/openocd/scripts"
+      ],
+      "configFiles": [
+        "interface/cmsis-dap.cfg",
+        "target/efm32s2_g23.cfg"
+      ]
     }
   ]
 }
@@ -290,14 +370,14 @@ This is the one that matters. It tells **Cortex-Debug** to spin up `JLinkGDBServ
 
 Key fields:
 
-- **`servertype: jlink`** — Cortex-Debug starts `JLinkGDBServer` for us (port 2331).
-- **`device`** — exact J-Link device name. `EFR32MG24BxxxF1536` matches the 1536 KB-flash variant on the Nano Matter.
-- **`interface: swd`** — Serial Wire Debug, the 2-wire debug protocol Cortex-M chips use.
+- **`servertype: openocd`** — Cortex-Debug starts `openocd` for us (port 3333).
+- **`serverpath` + `searchDir`** — point Cortex-Debug at the **Silicon Labs–forked OpenOCD** that the Arduino core installed. Vanilla Homebrew openocd does not include `target/efm32s2_g23.cfg` and cannot program the EFR32MG24's flash.
+- **`configFiles`** — the OpenOCD configs to load. `interface/cmsis-dap.cfg` selects the on-board probe; `target/efm32s2_g23.cfg` is the Silicon Labs Series-2 / xG23/xG24 target script that knows how to drive the chip's flash controller.
 - **`runToEntryPoint`** — pause execution at this symbol after flashing. For us, that's `reset_handler` (we define it in Session 4).
 - **`preLaunchTask: build`** — runs the `build` task in `tasks.json` before each debug session, so you never debug stale binaries.
 - **Launch vs. Attach** — *Launch* flashes a fresh binary and resets. *Attach* connects to whatever is already running on the chip (handy if you're chasing a bug that only appears after some uptime).
 
-> **Try it (after Session 4):** with the board plugged in and `main.elf` built, hit **F5**. VS Code starts JLinkGDBServer in a hidden terminal, flashes the chip, and stops at the very first instruction of `reset_handler`. Now **F10** (step over), **F11** (step in), **F5** (continue) — you have a debugger.
+> **Try it (after Session 4):** with the board plugged in and `main.elf` built, hit **F5**. VS Code starts OpenOCD in a hidden terminal, flashes the chip, and stops at the very first instruction of `reset_handler`. Now **F10** (step over), **F11** (step in), **F5** (continue) — you have a debugger.
 
 ---
 
@@ -333,8 +413,8 @@ This is the loop you'll use from Session 4 onward:
 2. Edit `main.s`.
 3. **F5** to debug. VS Code:
    - runs `make` (`preLaunchTask: build`),
-   - launches `JLinkGDBServer`,
-   - launches `arm-none-eabi-gdb` and connects it,
+   - launches the Silicon Labs OpenOCD with `interface/cmsis-dap.cfg` + `target/efm32s2_g23.cfg`,
+   - launches `arm-none-eabi-gdb` and connects it to `:3333`,
    - flashes the freshly-built `main.elf`,
    - resets the chip and halts at `reset_handler`.
 4. Click in the gutter of `main.s` to set breakpoints. Use **F10** / **F11** to step.
@@ -348,20 +428,25 @@ This is the loop you'll use from Session 4 onward:
 | Symptom | Likely cause / fix |
 |---|---|
 | `arm-none-eabi-as: command not found` | Toolchain not on `$PATH`. Open a fresh terminal, or `echo 'export PATH="$(brew --prefix)/bin:$PATH"' >> ~/.zshrc`. |
-| Cortex-Debug error: *"Failed to launch JLinkGDBServer"* | Wrong path in `cortex-debug.JLinkGDBServerPath`. Run `which JLinkGDBServerCLExe` and paste the result. |
-| J-Link error: *"Cannot connect to target"* | Board not plugged in / different USB cable / debug probe firmware isn't J-Link. Try `system_profiler SPUSBDataType \| grep -i j-link` to verify. |
-| Cortex-Debug error: *"Unknown device EFR32MG24BxxxF1536"* | Update Segger J-Link tools (`brew upgrade --cask segger-jlink`); newer EFR32 device names ship in recent versions. |
+| `openocd: command not found` (in VS Code) | `cortex-debug.openocdPath` is wrong. Set it to `~/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd`. |
+| OpenOCD: *"unable to find a matching CMSIS-DAP device"* | macOS USB stack doesn't see the board. Try a different USB-C cable (power-only cables are the #1 cause), plug directly into the Mac (no hub), and run `ioreg -p IOUSB -l \| grep -E '"USB Product Name"'` to confirm enumeration. |
+| OpenOCD: *"Can't find target/efm32s2_g23.cfg"* | You're running vanilla Homebrew `openocd`. Use the Silicon Labs–forked binary at `~/Library/Arduino15/.../0.12.0-arduino1-static/bin/openocd` with its bundled scripts dir. |
+| OpenOCD: *"target was not examined"* / flash programming fails | You're using `target/efm32.cfg` from upstream OpenOCD. The EFR32MG24 needs `target/efm32s2_g23.cfg` from the Silicon Labs fork. |
+| OpenOCD: *"Error: timed out while waiting for target halted"* | Code is stuck in a tight bootloop or an exception. Power-cycle the board, then try with `-c "init; reset halt"` to halt at vector reset before doing anything else. |
+| Cortex-Debug: *"Failed to launch OpenOCD"* | Wrong path in `cortex-debug.openocdPath`. Run `which openocd` and paste the result. |
 | Breakpoints don't hit | You're debugging stale code. Make sure `preLaunchTask: build` is set, or re-run **build** manually. Also check the Cortex-Debug **gdb-server** terminal for "Flash download skipped" warnings. |
 | `arm-none-eabi-gdb` complains about Python | `brew install python@3.11` and re-launch VS Code so it picks up the new env. |
-| macOS Gatekeeper blocks Segger tools | **System Settings → Privacy & Security → "Allow Anyway"** the first time. |
+| Flashing seems to succeed but the chip doesn't run your code | Forgot the **Thumb bit** in the vector table? Reset handler address must be `addr | 1` (Session 3 covers this). Or your linker script doesn't place `.vectors` at `0x08000000` — check `arm-none-eabi-objdump -h main.elf`. |
 
 ---
 
 ## What you should remember
 
-- The whole toolchain is **`brew install --cask gcc-arm-embedded`** + **`brew install --cask segger-jlink`** + VS Code with **C/C++**, **Cortex-Debug**, **ARM** extensions.
+- The toolchain is **`brew install --cask gcc-arm-embedded`** + the **Silicon Labs Arduino core** (which installs the right OpenOCD fork at `~/Library/Arduino15/...`) + VS Code with **C/C++**, **Cortex-Debug**, **ARM** extensions.
 - Building an `.elf` is **assemble** (`as`) → **link** (`ld`). Always pass `-mcpu=cortex-m33 -mthumb` to the assembler.
-- VS Code talks to the chip through **Cortex-Debug → JLinkGDBServer → J-Link OB → Cortex-M33**. Each layer is a separate process you can debug independently.
+- The Nano Matter's debug probe is the on-board **CMSIS-DAP**, not J-Link. We talk to it with **OpenOCD**, which doubles as the GDB server on `:3333`.
+- Standard OpenOCD invocation: `openocd -s "$SILABS_OOCD/share/openocd/scripts" -f interface/cmsis-dap.cfg -f target/efm32s2_g23.cfg` — using the **Silicon Labs–forked openocd**, not Homebrew's.
+- VS Code talks to the chip through **Cortex-Debug → OpenOCD → CMSIS-DAP (SAMD11) → Cortex-M33**. Each layer is a separate process you can debug independently.
 - `launch.json` is the file you'll come back to most. The two configs that matter are **Launch** (flash + reset + halt) and **Attach** (don't touch the chip, just hook into whatever is running).
 - The first session where we flash a real chip is **Session 4**. Until then we just inspect what we build with `objdump`.
 

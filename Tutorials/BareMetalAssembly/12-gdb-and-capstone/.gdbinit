@@ -1,11 +1,12 @@
-# .gdbinit — auto-connect arm-none-eabi-gdb to JLinkGDBServer for this project.
-# Start the server in another terminal first:
-#   JLinkGDBServer -device EFR32MG24BxxxF1536 -if SWD -speed 4000
+# .gdbinit — auto-connect arm-none-eabi-gdb to OpenOCD for this project.
+# Start the server in another terminal first (`make gdbserver` from this folder),
+# which uses the Silicon Labs–forked OpenOCD:
+#   $SILABS_OOCD/bin/openocd -s $SILABS_OOCD/share/openocd/scripts \
+#                            -f interface/cmsis-dap.cfg -f target/efm32s2_g23.cfg
 
 file main.elf
-target remote :2331
-monitor reset
-monitor halt
+target extended-remote :3333
+monitor reset halt
 set confirm off
 set print pretty on
 display/i $pc
