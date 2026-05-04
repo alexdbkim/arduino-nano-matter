@@ -10,7 +10,7 @@
       "servertype": "openocd",
       "configFiles": [
         "interface/cmsis-dap.cfg",
-        "target/efm32s2.cfg"
+        "target/efm32.cfg"
       ],
       "runToEntryPoint": "reset_handler",
       "preLaunchTask": "build",
@@ -25,7 +25,7 @@
       "servertype": "openocd",
       "configFiles": [
         "interface/cmsis-dap.cfg",
-        "target/efm32s2.cfg"
+        "target/efm32.cfg"
       ]
     }
   ]

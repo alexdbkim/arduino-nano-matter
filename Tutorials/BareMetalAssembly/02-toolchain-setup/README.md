@@ -105,14 +105,14 @@ Verify:
 openocd --version
 ```
 
-You should see `Open On-Chip Debugger 0.12.0` or newer. **Older versions may not have `target/efm32s2.cfg`** — see the troubleshooting section below if that's you.
+You should see `Open On-Chip Debugger 0.12.0` or newer. **Older versions may not have `target/efm32.cfg`** — see the troubleshooting section below if that's you.
 
 ### Plug in the board, and confirm OpenOCD can see it
 
 Connect the Nano Matter via USB-C. Then:
 
 ```sh
-openocd -f interface/cmsis-dap.cfg -f target/efm32s2.cfg
+openocd -f interface/cmsis-dap.cfg -f target/efm32.cfg
 ```
 
 You should see something like:
@@ -135,7 +135,7 @@ Info : Listening on port 4444 for telnet connections
 > system_profiler SPUSBDataType | grep -i -A2 'arduino\|cmsis'
 > ```
 
-> **Gotcha:** if you see `Can't find target/efm32s2.cfg`, your OpenOCD is older than 0.12. Either upgrade (`brew upgrade open-ocd`) or substitute `-f target/efm32.cfg` for now — both work for flashing, the newer one just knows more about the chip's flash size.
+> **Gotcha:** if you see `Can't find target/efm32.cfg`, your OpenOCD is older than 0.11. Run `brew upgrade open-ocd` and try again. The `efm32.cfg` script auto-detects the EFR32MG24 (Series 2) on first connect — there is no separate `efm32s2.cfg`.
 
 ---
 
@@ -301,7 +301,7 @@ Now **⌘⇧B** runs `make`. **⌘⇧P → "Tasks: Run Task" → flash** writes 
 
 ### `.vscode/launch.json` — the debugger
 
-This is the one that matters. It tells **Cortex-Debug** to spin up `openocd` (CMSIS-DAP + EFM32-S2 config), attach `arm-none-eabi-gdb`, flash your `.elf`, and stop at `reset_handler` so you can step from instruction zero.
+This is the one that matters. It tells **Cortex-Debug** to spin up `openocd` (CMSIS-DAP + EFM32 config), attach `arm-none-eabi-gdb`, flash your `.elf`, and stop at `reset_handler` so you can step from instruction zero.
 
 ```jsonc
 {
@@ -316,7 +316,7 @@ This is the one that matters. It tells **Cortex-Debug** to spin up `openocd` (CM
       "servertype": "openocd",
       "configFiles": [
         "interface/cmsis-dap.cfg",
-        "target/efm32s2.cfg"
+        "target/efm32.cfg"
       ],
       "runToEntryPoint": "reset_handler",
       "preLaunchTask": "build",
@@ -331,7 +331,7 @@ This is the one that matters. It tells **Cortex-Debug** to spin up `openocd` (CM
       "servertype": "openocd",
       "configFiles": [
         "interface/cmsis-dap.cfg",
-        "target/efm32s2.cfg"
+        "target/efm32.cfg"
       ]
     }
   ]
@@ -341,7 +341,7 @@ This is the one that matters. It tells **Cortex-Debug** to spin up `openocd` (CM
 Key fields:
 
 - **`servertype: openocd`** — Cortex-Debug starts `openocd` for us (port 3333).
-- **`configFiles`** — the OpenOCD configs to load. `interface/cmsis-dap.cfg` selects the on-board probe; `target/efm32s2.cfg` selects the EFR32MG24 (Series-2).
+- **`configFiles`** — the OpenOCD configs to load. `interface/cmsis-dap.cfg` selects the on-board probe; `target/efm32.cfg` covers the entire EFM32/EFR32 family and auto-detects the EFR32MG24.
 - **`runToEntryPoint`** — pause execution at this symbol after flashing. For us, that's `reset_handler` (we define it in Session 4).
 - **`preLaunchTask: build`** — runs the `build` task in `tasks.json` before each debug session, so you never debug stale binaries.
 - **Launch vs. Attach** — *Launch* flashes a fresh binary and resets. *Attach* connects to whatever is already running on the chip (handy if you're chasing a bug that only appears after some uptime).
@@ -382,7 +382,7 @@ This is the loop you'll use from Session 4 onward:
 2. Edit `main.s`.
 3. **F5** to debug. VS Code:
    - runs `make` (`preLaunchTask: build`),
-   - launches `openocd` with `interface/cmsis-dap.cfg` + `target/efm32s2.cfg`,
+   - launches `openocd` with `interface/cmsis-dap.cfg` + `target/efm32.cfg`,
    - launches `arm-none-eabi-gdb` and connects it to `:3333`,
    - flashes the freshly-built `main.elf`,
    - resets the chip and halts at `reset_handler`.
@@ -399,7 +399,7 @@ This is the loop you'll use from Session 4 onward:
 | `arm-none-eabi-as: command not found` | Toolchain not on `$PATH`. Open a fresh terminal, or `echo 'export PATH="$(brew --prefix)/bin:$PATH"' >> ~/.zshrc`. |
 | `openocd: command not found` | `brew install open-ocd` (note the hyphen in the formula name). |
 | OpenOCD: *"unable to find CMSIS-DAP device"* | Wrong USB cable (power-only) or the board didn't enumerate. Try another cable; check `system_profiler SPUSBDataType \| grep -i cmsis`. |
-| OpenOCD: *"Can't find target/efm32s2.cfg"* | OpenOCD older than 0.12. `brew upgrade open-ocd` or fall back to `target/efm32.cfg`. |
+| OpenOCD: *"Can't find target/efm32.cfg"* | OpenOCD older than 0.12. `brew upgrade open-ocd` or fall back to `target/efm32.cfg`. |
 | OpenOCD: *"Error: timed out while waiting for target halted"* | Code is stuck in a tight bootloop or an exception. Power-cycle the board, then try with `-c "init; reset halt"` to halt at vector reset before doing anything else. |
 | Cortex-Debug: *"Failed to launch OpenOCD"* | Wrong path in `cortex-debug.openocdPath`. Run `which openocd` and paste the result. |
 | Breakpoints don't hit | You're debugging stale code. Make sure `preLaunchTask: build` is set, or re-run **build** manually. Also check the Cortex-Debug **gdb-server** terminal for "Flash download skipped" warnings. |
@@ -413,7 +413,7 @@ This is the loop you'll use from Session 4 onward:
 - The whole toolchain is **`brew install --cask gcc-arm-embedded`** + **`brew install open-ocd`** + VS Code with **C/C++**, **Cortex-Debug**, **ARM** extensions.
 - Building an `.elf` is **assemble** (`as`) → **link** (`ld`). Always pass `-mcpu=cortex-m33 -mthumb` to the assembler.
 - The Nano Matter's debug probe is the on-board **CMSIS-DAP**, not J-Link. We talk to it with **OpenOCD**, which doubles as the GDB server on `:3333`.
-- Standard OpenOCD invocation: `openocd -f interface/cmsis-dap.cfg -f target/efm32s2.cfg`.
+- Standard OpenOCD invocation: `openocd -f interface/cmsis-dap.cfg -f target/efm32.cfg`.
 - VS Code talks to the chip through **Cortex-Debug → OpenOCD → CMSIS-DAP (SAMD11) → Cortex-M33**. Each layer is a separate process you can debug independently.
 - `launch.json` is the file you'll come back to most. The two configs that matter are **Launch** (flash + reset + halt) and **Attach** (don't touch the chip, just hook into whatever is running).
 - The first session where we flash a real chip is **Session 4**. Until then we just inspect what we build with `objdump`.

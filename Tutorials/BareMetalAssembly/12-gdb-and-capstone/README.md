@@ -21,7 +21,7 @@ In one terminal, from this folder:
 ```sh
 make gdbserver
 # which is the same as:
-# openocd -f interface/cmsis-dap.cfg -f target/efm32s2.cfg
+# openocd -f interface/cmsis-dap.cfg -f target/efm32.cfg
 ```
 
 OpenOCD prints something like `Listening on port 3333 for gdb connections` and sits there waiting for a client.

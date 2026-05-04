@@ -15,10 +15,10 @@ OBJDUMP := $(PREFIX)objdump
 
 # OpenOCD config for the Nano Matter:
 #   - the on-board ATSAMD11 USB bridge speaks CMSIS-DAP,
-#   - EFR32MG24 is part of the EFM32 Series-2 target family.
-# If your OpenOCD is older and lacks `target/efm32s2.cfg`, fall back to `target/efm32.cfg`.
+#   - target/efm32.cfg covers the entire EFM32/EFR32 family and
+#     auto-detects the EFR32MG24 inside the MGM240S module.
 OPENOCD       ?= openocd
-OPENOCD_FLAGS ?= -f interface/cmsis-dap.cfg -f target/efm32s2.cfg
+OPENOCD_FLAGS ?= -f interface/cmsis-dap.cfg -f target/efm32.cfg
 
 ASFLAGS := -mcpu=cortex-m33 -mthumb -g
 LDFLAGS := -T linker.ld --no-warn-rwx-segments
