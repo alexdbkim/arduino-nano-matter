@@ -171,33 +171,20 @@ You should already have these from Session 02:
   - **C/C++** (`ms-vscode.cpptools`) — only used for IntelliSense; not strictly required for the assembly debug flow.
 - The board plugged in via a **data** USB-C cable.
 
-You don't need to configure anything — both `04-first-program/.vscode/` and the repo-root `.vscode/` are already wired up for you.
+You don't need to configure anything — the repo-root `.vscode/` is already wired up.
 
 > **Watch out for stale user-level `files.associations`.** If your User `settings.json` (`~/Library/Application Support/Code/User/settings.json`) maps `*.s` to a language id that *no installed extension provides* — e.g. an old `"*.{a80,z80,asm,inc,s}": "asm-collection"` entry from a removed extension — VS Code picks that mapping and silently falls back to **plain text**. The fix is to remove `s` from any glob that points at a missing language, leaving `"*.s": "arm"` to win.
 
-### Step 1 — open a workspace that has `.vscode/`
-
-You have two equally valid options:
-
-**Option A — open the session folder (simplest):**
-
-```sh
-cd 04-first-program
-code .
-```
-
-VS Code uses `04-first-program/.vscode/launch.json`, which hardcodes this session.
-
-**Option B — open the repo root (so you can navigate all sessions):**
+### Step 1 — open the repo root in VS Code
 
 ```sh
 cd /path/to/arduino-nano-matter
 code .
 ```
 
-VS Code uses the repo-root `.vscode/launch.json`, which is dynamic — it reads the folder of **whichever `main.s` is currently focused** in the editor (`${fileDirname}`) and debugs *that* session. So when you're in `04-first-program/main.s` and press F5, it builds and debugs Session 04; switch to `05-.../main.s` and F5 builds and debugs Session 05.
+VS Code uses the repo-root `.vscode/launch.json`, which is **dynamic** — `${fileDirname}` resolves to the folder of whichever `main.s` is currently focused in the editor, and F5 builds + flashes + debugs *that* session. So while you're in `04-first-program/main.s`, F5 debugs Session 04; switch to `05-.../main.s` and F5 debugs Session 05. One window, all sessions.
 
-> **If F5 just opens an empty `launch.json`** with `"type": "lldb"` and `<your program>`, you opened a folder that has no `.vscode/` at all and VS Code auto-generated a stub. Close that file *without* saving, then open one of the two folders above.
+> **If F5 just opens an empty `launch.json`** with `"type": "lldb"` and `<your program>`, you opened a folder that has no `.vscode/` at all (e.g. you opened `Tutorials/BareMetalAssembly/` instead of the repo root) and VS Code auto-generated a stub. Close that file *without* saving and reopen the repo root.
 
 ### Step 2 — verify the probe is alive
 
@@ -232,7 +219,7 @@ A **solid red dot** appears. That's a bound breakpoint. Cortex-Debug supports up
 
 Hit **F5** (or **Run → Start Debugging** from the menu). You'll see, in order:
 
-1. The **build + flash task** runs — `make` compiles `main.s` → `main.o` → `main.elf` → `main.hex`, then `make flash` calls OpenOCD's `program` command to erase + write + verify the chip. This is configured by `"preLaunchTask": "flash current session"` (or `"flash"` from the per-session config), so you never debug a stale binary.
+1. The **build + flash task** runs — `make` compiles `main.s` → `main.o` → `main.elf` → `main.hex`, then `make flash` calls OpenOCD's `program` command to erase + write + verify the chip. This is configured by `"preLaunchTask": "flash current session"`, so you never debug a stale binary.
 2. **A second OpenOCD process starts** for the debug session itself (in a hidden "gdb-server" terminal at the bottom). It connects to the CMSIS-DAP probe, halts the M33, and listens on a private GDB port.
 3. **`arm-none-eabi-gdb` launches**, attaches to that OpenOCD, runs `monitor reset halt`, and **stops at `reset_handler`** (because `"runToEntryPoint": "reset_handler"` is set in `launch.json`).
 
@@ -310,9 +297,9 @@ A quick reference for every non-obvious knob, so you can adapt this for your own
 | `serverpath` | `…/SiliconLabs/.../openocd` | The Silicon-Labs-forked binary. Vanilla openocd 0.12 lacks `target/efm32s2_g23.cfg` and can't program this chip. |
 | `searchDir` | the matching `share/openocd/scripts` | Tells OpenOCD where to find `interface/cmsis-dap.cfg` and `target/efm32s2_g23.cfg`. |
 | `configFiles` | `[interface/cmsis-dap.cfg, target/efm32s2_g23.cfg]` | The two scripts that describe our probe and our chip. |
-| `cwd`, `executable` | `${fileDirname}` (repo-root config) or `${workspaceFolder}` (per-session config) | Where to find `main.elf`. The repo-root config is *dynamic* — whichever `main.s` is focused decides which session is debugged. |
+| `cwd`, `executable` | `${fileDirname}` | Where to find `main.elf`. *Dynamic* — whichever `main.s` is focused decides which session is debugged. |
 | `runToEntryPoint` | `reset_handler` | After connecting, halt at the first instruction of `reset_handler` instead of leaving the chip running. |
-| `preLaunchTask` | `flash current session` (or `flash`) | Build + flash via `make` *before* the debug session starts, so the chip always has the latest binary. |
+| `preLaunchTask` | `flash current session` | Build + flash via `make` *before* the debug session starts, so the chip always has the latest binary. |
 | `loadFiles` | `[]` | Skip cortex-debug's own GDB-`load`/`vFlashErase` step (which the silabs OpenOCD doesn't accept). The `preLaunchTask` already programmed the chip. |
 | `showDevDebugOutput` | `raw` | Dump the GDB-MI traffic to the **DEBUG CONSOLE** panel — the first thing to read when something breaks. |
 
@@ -320,9 +307,9 @@ A quick reference for every non-obvious knob, so you can adapt this for your own
 
 | Task | Command | When |
 |---|---|---|
-| `build current session` (or `build`) | `make` in `${fileDirname}` | Default build (⌘⇧B). |
-| `flash current session` (or `flash`) | `make flash` (depends on build) | Used as the `preLaunchTask`. |
-| `clean current session` (or `clean`) | `make clean` | Manual cleanup. |
+| `build current session` | `make` in `${fileDirname}` | Default build (⌘⇧B). |
+| `flash current session` | `make flash` (depends on build) | Used as the `preLaunchTask`. |
+| `clean current session` | `make clean` | Manual cleanup. |
 
 #### `settings.json`
 
