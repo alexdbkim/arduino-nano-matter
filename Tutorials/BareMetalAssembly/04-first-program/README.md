@@ -206,6 +206,8 @@ A **solid red dot** appears. That's a bound breakpoint. Cortex-Debug supports up
 
 > **The #1 reason breakpoints "don't work":** you clicked a line that has **no instruction** — the `reset_handler:` label (line 20), the vector-table data (lines 10–11), a comment, or a blank. GDB has no address to bind to, so VS Code shows a **hollow grey circle** instead of a solid red dot, and the chip flies right past it. **Only click on lines with an actual instruction** (`nop`, `b`, `mov`, etc.). You can verify which lines map to instructions by running `arm-none-eabi-objdump --dwarf=decodedline main.elf` — only those line numbers are breakpointable.
 
+> **The #2 reason — and you'll hit this even before #1:** by default, VS Code only allows breakpoints in files whose **language** it knows is debuggable (C, C++, Python, etc.). It does **not** consider `arm` (the language id given to `.s` files by the ARM syntax extension) debuggable, so clicking the gutter does **literally nothing** — no dot at all, hollow or otherwise. The fix is one setting: `"debug.allowBreakpointsEverywhere": true`. It's already in `.vscode/settings.json` for you. If you opened VS Code *before* pulling this change, **reload the window** (**⌘⇧P → "Developer: Reload Window"**) so VS Code picks it up.
+
 > **Also:** `runToEntryPoint: reset_handler` in `launch.json` already auto-halts you at the first instruction of `reset_handler` on launch. So even with **zero** manual breakpoints, F5 will stop on line 21. The breakpoint on line 24 is what catches you *after* you press Continue.
 
 ### Step 4 — press F5
