@@ -17,6 +17,7 @@
     .section .text
     .thumb_func
     .global  reset_handler
+    
 reset_handler:
     nop
     nop

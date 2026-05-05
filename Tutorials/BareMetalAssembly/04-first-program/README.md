@@ -164,11 +164,16 @@ Flashing from the command line is great. But the real superpower is **stopping t
 
 You should already have these from Session 02:
 
-- The **Arduino IDE + Silicon Labs core** installed (gives us the working OpenOCD at `~/Library/Arduino15/.../0.12.0-arduino1-static/`).
-- VS Code extensions: **C/C++** (Microsoft), **Cortex-Debug** (marus25), and **ARM** (dan-c-underwood).
+- The **Arduino IDE + Silicon Labs core** installed (gives us the working OpenOCD at `~/Library/Arduino15/.../0.12.0-arduino1-static/`). The bundled OpenOCD is the *only* one that knows how to program the EFR32MG24 — vanilla Homebrew openocd 0.12 will *not* work.
+- VS Code extensions:
+  - **Cortex-Debug** (`marus25.cortex-debug`) — the debugger that drives GDB + OpenOCD.
+  - **ARM** (`dan-c-underwood.arm`) — provides the `arm` language id used by all the `.s` files. **Without this extension, `*.s: arm` in `files.associations` resolves to a non-existent language and VS Code silently falls back to plain text** (no syntax colours, no breakpoints).
+  - **C/C++** (`ms-vscode.cpptools`) — only used for IntelliSense; not strictly required for the assembly debug flow.
 - The board plugged in via a **data** USB-C cable.
 
-You don't need to configure anything — `04-first-program/.vscode/{launch,settings,tasks}.json` are already wired up for you.
+You don't need to configure anything — both `04-first-program/.vscode/` and the repo-root `.vscode/` are already wired up for you.
+
+> **Watch out for stale user-level `files.associations`.** If your User `settings.json` (`~/Library/Application Support/Code/User/settings.json`) maps `*.s` to a language id that *no installed extension provides* — e.g. an old `"*.{a80,z80,asm,inc,s}": "asm-collection"` entry from a removed extension — VS Code picks that mapping and silently falls back to **plain text**. The fix is to remove `s` from any glob that points at a missing language, leaving `"*.s": "arm"` to win.
 
 ### Step 1 — open a workspace that has `.vscode/`
 
@@ -287,6 +292,48 @@ Press **⇧F5** (or click the red square on the toolbar). VS Code stops `gdb` an
 > **Gotcha — yellow arrow stuck on a line that isn't `reset_handler`:** you flashed once, didn't reset, and re-attached. Use **⌘⇧F5** (Restart) to force a reset-and-halt.
 
 > **Gotcha — breakpoint shows as a hollow grey circle:** the line you clicked has no instruction associated with it (it's a label, comment, blank, or the `.word` data in the vector table). GDB can't bind it. Move the breakpoint to a line that actually contains an instruction — use `arm-none-eabi-objdump --dwarf=decodedline main.elf` to list the breakpointable lines.
+
+> **Gotcha — `Error erasing flash with vFlashErase packet`:** the Silicon Labs–forked OpenOCD's flash driver does *not* implement GDB's `vFlashErase` remote-protocol packet, so cortex-debug's default GDB `load` path (`target-download`) fails. Our `launch.json` works around this by setting `"loadFiles": []` (skip GDB's load entirely) and `"preLaunchTask": "flash current session"` — which calls `make flash`, which uses OpenOCD's higher-level `program` command, which **does** work. If you fork this config and ever flip back to default behaviour, you'll see this error again.
+
+> **Gotcha — main.s opens as "Plain Text" with no colours:** the `dan-c-underwood.arm` extension isn't installed, *or* a competing entry in your User `settings.json` is mapping `*.s` to an unregistered language id. See **Prerequisites** above.
+
+### What's in `.vscode/`
+
+A quick reference for every non-obvious knob, so you can adapt this for your own projects later:
+
+#### `launch.json` (cortex-debug)
+
+| Field | Value | Why |
+|---|---|---|
+| `type` | `cortex-debug` | The marus25 extension that wires GDB ↔ OpenOCD ↔ VS Code. |
+| `servertype` | `openocd` | We use OpenOCD as the GDB remote (vs. J-Link, ST-Link, BMP, etc.). |
+| `serverpath` | `…/SiliconLabs/.../openocd` | The Silicon-Labs-forked binary. Vanilla openocd 0.12 lacks `target/efm32s2_g23.cfg` and can't program this chip. |
+| `searchDir` | the matching `share/openocd/scripts` | Tells OpenOCD where to find `interface/cmsis-dap.cfg` and `target/efm32s2_g23.cfg`. |
+| `configFiles` | `[interface/cmsis-dap.cfg, target/efm32s2_g23.cfg]` | The two scripts that describe our probe and our chip. |
+| `cwd`, `executable` | `${fileDirname}` (repo-root config) or `${workspaceFolder}` (per-session config) | Where to find `main.elf`. The repo-root config is *dynamic* — whichever `main.s` is focused decides which session is debugged. |
+| `runToEntryPoint` | `reset_handler` | After connecting, halt at the first instruction of `reset_handler` instead of leaving the chip running. |
+| `preLaunchTask` | `flash current session` (or `flash`) | Build + flash via `make` *before* the debug session starts, so the chip always has the latest binary. |
+| `loadFiles` | `[]` | Skip cortex-debug's own GDB-`load`/`vFlashErase` step (which the silabs OpenOCD doesn't accept). The `preLaunchTask` already programmed the chip. |
+| `showDevDebugOutput` | `raw` | Dump the GDB-MI traffic to the **DEBUG CONSOLE** panel — the first thing to read when something breaks. |
+
+#### `tasks.json`
+
+| Task | Command | When |
+|---|---|---|
+| `build current session` (or `build`) | `make` in `${fileDirname}` | Default build (⌘⇧B). |
+| `flash current session` (or `flash`) | `make flash` (depends on build) | Used as the `preLaunchTask`. |
+| `clean current session` (or `clean`) | `make clean` | Manual cleanup. |
+
+#### `settings.json`
+
+| Setting | Why |
+|---|---|
+| `cortex-debug.openocdPath` | Default global path used by the extension if `serverpath` weren't set in `launch.json`. Belt and braces. |
+| `cortex-debug.gdbPath` | `arm-none-eabi-gdb` from the homebrew toolchain. |
+| `cortex-debug.armToolchainPath` | Folder that contains `arm-none-eabi-*` (used to find `objdump`, `nm`, etc.). |
+| `files.associations` | `*.s,*.S → arm`, `*.ld → linkerscript`. Without `arm`, no syntax colour and (more importantly) the gutter clicks for breakpoints lose half their UX. |
+| `debug.allowBreakpointsEverywhere` | **Critical.** VS Code only lets you click breakpoints in files whose language id was registered as debuggable by some extension. Cortex-Debug registers C/C++ but **not `arm`**, so without this flag, gutter clicks on `main.s` are silently ignored. |
+| `C_Cpp.default.{compilerPath,intelliSenseMode}` | Just for IntelliSense in any C/C++ files (not used by the assembly debug flow). |
 
 ---
 
