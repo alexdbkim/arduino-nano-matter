@@ -130,15 +130,60 @@ Connect the Nano Matter via USB-C. **Use a known-data cable** — a power-only U
 You should see something like:
 
 ```
-Open On-Chip Debugger 0.12.0+dev-...
+Open On-Chip Debugger 0.12.0+dev-01514-g21fa2de70 (2024-02-07-19:03)
+Info : auto-selecting first available session transport "swd". To override use 'transport select <transport>'.
+Info : Using CMSIS-DAPv2 interface with VID:PID=0x2341:0x0072, serial=9FA69C6B
 Info : CMSIS-DAP: SWD supported
-Info : CMSIS-DAP: FW Version = ...
+Info : CMSIS-DAP: FW Version = 2.0.0
+Info : CMSIS-DAP: Interface Initialised (SWD)
 Info : SWD DPIDR 0x6ba02477
-Info : [efm32s2.cpu] Cortex-M33 ...
+Info : [efm32s2.cpu] Cortex-M33 r0p4 processor detected
+Info : [efm32s2.cpu] target has 8 breakpoints, 4 watchpoints
+Info : [efm32s2.cpu] Examination succeed
+Info : starting gdb server for efm32s2.cpu on 3333
 Info : Listening on port 3333 for gdb connections
 ```
 
 🎉 — OpenOCD is talking to the chip. Hit **Ctrl-C** to stop it for now.
+
+### Verified handshake — what success looks like
+
+The output above isn't aspirational — it's a literal copy from this exact toolchain talking to a real Nano Matter on macOS (verified 2026-05-04). Use these values to sanity-check your own connection:
+
+| Field | Verified value | What it means |
+|---|---|---|
+| USB **VID:PID** | `0x2341:0x0072` | Vendor *Arduino*, product *Nano Matter CMSIS_DAP* (the on-board ATSAMD11 probe). |
+| **CMSIS-DAP FW** | `2.0.0` | DAPv2 transport, supports SWD. |
+| **SWD DPIDR** | `0x6ba02477` | The Cortex-M33's SWD DP identifier — same value on every EFR32MG24. |
+| **Core** | `Cortex-M33 r0p4` | The application core inside the MGM240S module. |
+| **Breakpoints / watchpoints** | `8 / 4` | Hardware debug resources you can use simultaneously. |
+
+If you want to halt the chip and read its state, append a few commands to the invocation:
+
+```sh
+"$SILABS_OOCD/bin/openocd" \
+  -s "$SILABS_OOCD/share/openocd/scripts" \
+  -f interface/cmsis-dap.cfg -f target/efm32s2_g23.cfg \
+  -c "init; reset_config srst_nogate; reset halt; reg pc; reg msp; reg xpsr; exit"
+```
+
+On a freshly-arrived board (still running the Arduino factory sketch) we saw:
+
+```
+[efm32s2.cpu] halted due to debug-request, current mode: Thread
+xPSR: 0xf9000000 pc: 0x08000170 msp: 0x20001008
+```
+
+PC sitting somewhere in `0x08000xxx` means execution is in flash (the Arduino bootloader / sketch). Once you flash a Session 04+ binary the PC will instead land in your own `reset_handler`. MSP near the top of SRAM (`0x20001000` region) is normal for Cortex-M boot.
+
+You can also independently confirm the board is enumerating by checking macOS:
+
+```sh
+ioreg -p IOUSB -l | grep -E '"USB Product Name"|"USB Vendor Name"'
+ls /dev/cu.usbmodem*
+```
+
+Expected: an `Arduino` / `Nano Matter CMSIS_DAP` entry, plus a `/dev/cu.usbmodem*` device (the EFR32MG24's CDC ACM serial — also useful later when we want to print over UART).
 
 ### Troubleshooting "unable to find a matching CMSIS-DAP device"
 

@@ -43,6 +43,8 @@ The Nano Matter has an on-board **CMSIS-DAP debug probe** (firmware running on t
 
 > **No Arduino IDE. No Simplicity Studio.** Everything is command-line. This is on purpose — when you build it yourself, you understand it.
 
+> **Toolchain status:** the OpenOCD + CMSIS-DAP path documented in these tutorials has been **hardware-verified** on a real Nano Matter (macOS, 2026-05-04). Confirmed probe identifiers — `Arduino — Nano Matter CMSIS_DAP`, USB VID:PID `0x2341:0x0072`, CMSIS-DAPv2 FW 2.0.0, SWD `DPIDR 0x6ba02477`, Cortex-M33 r0p4 on `efm32s2.cpu`. See Session 02's *"Verified handshake — what success looks like"* section for the literal expected output.
+
 ---
 
 ## The chip we're targeting
