@@ -1,0 +1,83 @@
+# VFNMS — fused negated multiply-subtract (single precision, single rounding)
+
+## Class & availability
+
+- **Class:** Floating-point
+- **Architecture:** ARMv8-M Mainline + FP
+- **Available on Arduino Nano Matter (EFR32MG24, Cortex-M33):** ✅
+- **Privilege required:** None
+- **Secure-state required:** No
+
+FPv5-SP only. Fused, single-rounded counterpart of [`VNMLS`](VNMLS.md).
+
+## Synopsis
+
+```text
+VFNMS.F32 <Sd>, <Sn>, <Sm>     @ Sd = -Sd + (Sn * Sm)  =  Sn*Sm - Sd
+```
+
+## Operands
+
+| Field | Type | Constraints |
+|-------|------|-------------|
+| `<Sd>` | accumulator (read+write, negated) | S0–S31 |
+| `<Sn>` | multiplicand | S0–S31 |
+| `<Sm>` | multiplier | S0–S31 |
+
+## Operation (pseudocode)
+
+```text
+CheckVFPEnabled();
+Sd = FPMulAdd(FPNeg(Sd), Sn, Sm, FPSCR);   // single rounding
+```
+
+## Flags affected
+
+| N | Z | C | V | Q |
+|---|---|---|---|---|
+| – | – | – | – | – |
+
+APSR untouched.
+
+## Encodings
+
+| Variant | Width | Form |
+|---------|-------|------|
+| T2 | 32-bit | `VFNMS.F32 Sd, Sn, Sm` |
+
+## Exceptions / faults
+
+- UsageFault (`NOCP`) if FPU disabled.
+
+## Example
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VFNMS demo: Newton step for 1/y -> err = 1 - x*y, then x += x*err
+    @ S0 = x (current 1/y estimate), S1 = y, S2 = 1.0 (acc seed)
+    vfnms.f32 s2, s1, s0     @ S2 = -1.0 + (y*x)  =  y*x - 1   (residual)
+    @ ... use S2 as Newton residual; x_new = x - x*S2 via VFMS
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `vfnms.f32 s2, s1, s0` — exact `y*x` minus the seed, single round. This is the textbook "compute residual for Newton-Raphson" idiom and is why fused ops exist on FPv5.
+
+## See also
+
+- [VNMLS](VNMLS.md) — two-rounding version
+- [VFMA](VFMA.md), [VFMS](VFMS.md), [VFNMA](VFNMA.md) — fused family
+- [VSQRT](VSQRT.md), [VDIV](VDIV.md) — common targets for Newton refinement
+
+## Reference
+
+- *Arm®v8-M Architecture Reference Manual* (DDI 0553B), §C2.4 — *VFNMS*.
