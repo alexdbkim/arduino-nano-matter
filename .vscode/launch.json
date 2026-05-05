@@ -2,11 +2,11 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug (CMSIS-DAP / OpenOCD)",
+      "name": "Debug current session (CMSIS-DAP / OpenOCD)",
       "type": "cortex-debug",
       "request": "launch",
-      "cwd": "${workspaceFolder}",
-      "executable": "${workspaceFolder}/main.elf",
+      "cwd": "${fileDirname}",
+      "executable": "${fileDirname}/main.elf",
       "servertype": "openocd",
       "serverpath": "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd",
       "searchDir": [
@@ -16,16 +16,17 @@
         "interface/cmsis-dap.cfg",
         "target/efm32s2_g23.cfg"
       ],
+      "loadFiles": [],
       "runToEntryPoint": "reset_handler",
-      "preLaunchTask": "build",
+      "preLaunchTask": "flash current session",
       "showDevDebugOutput": "raw"
     },
     {
-      "name": "Attach (CMSIS-DAP / OpenOCD)",
+      "name": "Attach current session (CMSIS-DAP / OpenOCD)",
       "type": "cortex-debug",
       "request": "attach",
-      "cwd": "${workspaceFolder}",
-      "executable": "${workspaceFolder}/main.elf",
+      "cwd": "${fileDirname}",
+      "executable": "${fileDirname}/main.elf",
       "servertype": "openocd",
       "serverpath": "${env:HOME}/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd",
       "searchDir": [

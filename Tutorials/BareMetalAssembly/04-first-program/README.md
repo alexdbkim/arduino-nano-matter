@@ -156,12 +156,181 @@ If you see `** Programming Finished **` and `** Verified OK **` near the end, yo
 
 ---
 
+## Break into the board from VS Code (step-by-step)
+
+Flashing from the command line is great. But the real superpower is **stopping the chip on a specific instruction and poking at it live** — registers, memory, the works. Here is exactly how to do that in VS Code, the first time.
+
+### Prerequisites (one-time)
+
+You should already have these from Session 02:
+
+- The **Arduino IDE + Silicon Labs core** installed (gives us the working OpenOCD at `~/Library/Arduino15/.../0.12.0-arduino1-static/`). The bundled OpenOCD is the *only* one that knows how to program the EFR32MG24 — vanilla Homebrew openocd 0.12 will *not* work.
+- VS Code extensions:
+  - **Cortex-Debug** (`marus25.cortex-debug`) — the debugger that drives GDB + OpenOCD.
+  - **ARM** (`dan-c-underwood.arm`) — provides the `arm` language id used by all the `.s` files. **Without this extension, `*.s: arm` in `files.associations` resolves to a non-existent language and VS Code silently falls back to plain text** (no syntax colours, no breakpoints).
+  - **C/C++** (`ms-vscode.cpptools`) — only used for IntelliSense; not strictly required for the assembly debug flow.
+- The board plugged in via a **data** USB-C cable.
+
+You don't need to configure anything — the repo-root `.vscode/` is already wired up.
+
+> **Watch out for stale user-level `files.associations`.** If your User `settings.json` (`~/Library/Application Support/Code/User/settings.json`) maps `*.s` to a language id that *no installed extension provides* — e.g. an old `"*.{a80,z80,asm,inc,s}": "asm-collection"` entry from a removed extension — VS Code picks that mapping and silently falls back to **plain text**. The fix is to remove `s` from any glob that points at a missing language, leaving `"*.s": "arm"` to win.
+
+### Step 1 — open the repo root in VS Code
+
+```sh
+cd /path/to/arduino-nano-matter
+code .
+```
+
+VS Code uses the repo-root `.vscode/launch.json`, which is **dynamic** — `${fileDirname}` resolves to the folder of whichever `main.s` is currently focused in the editor, and F5 builds + flashes + debugs *that* session. So while you're in `04-first-program/main.s`, F5 debugs Session 04; switch to `05-.../main.s` and F5 debugs Session 05. One window, all sessions.
+
+> **If F5 just opens an empty `launch.json`** with `"type": "lldb"` and `<your program>`, you opened a folder that has no `.vscode/` at all (e.g. you opened `Tutorials/BareMetalAssembly/` instead of the repo root) and VS Code auto-generated a stub. Close that file *without* saving and reopen the repo root.
+
+### Step 2 — verify the probe is alive
+
+Open the integrated terminal (**⌃`**) and run:
+
+```sh
+ls /dev/cu.usbmodem*
+```
+
+You should see something like `/dev/cu.usbmodem9FA69C6B3`. If it's missing, the board isn't enumerating — re-seat the cable before going further. Don't waste 30 minutes debugging "Cortex-Debug failed to launch" when the actual problem is USB.
+
+### Step 3 — set a breakpoint
+
+Open `main.s`. Click in the **gutter** (the empty space just left of the line numbers) next to **line 24**, the `b reset_handler` instruction:
+
+```asm
+21    nop
+22    nop
+23    nop
+24    b   reset_handler   @ infinite loop
+```
+
+A **solid red dot** appears. That's a bound breakpoint. Cortex-Debug supports up to **8 hardware breakpoints** simultaneously on this chip — more than you'll ever need.
+
+> **The #1 reason breakpoints "don't work":** you clicked a line that has **no instruction** — the `reset_handler:` label (line 20), the vector-table data (lines 10–11), a comment, or a blank. GDB has no address to bind to, so VS Code shows a **hollow grey circle** instead of a solid red dot, and the chip flies right past it. **Only click on lines with an actual instruction** (`nop`, `b`, `mov`, etc.). You can verify which lines map to instructions by running `arm-none-eabi-objdump --dwarf=decodedline main.elf` — only those line numbers are breakpointable.
+
+> **The #2 reason — and you'll hit this even before #1:** by default, VS Code only allows breakpoints in files whose **language** it knows is debuggable (C, C++, Python, etc.). It does **not** consider `arm` (the language id given to `.s` files by the ARM syntax extension) debuggable, so clicking the gutter does **literally nothing** — no dot at all, hollow or otherwise. The fix is one setting: `"debug.allowBreakpointsEverywhere": true`. It's already in `.vscode/settings.json` for you. If you opened VS Code *before* pulling this change, **reload the window** (**⌘⇧P → "Developer: Reload Window"**) so VS Code picks it up.
+
+> **Also:** `runToEntryPoint: reset_handler` in `launch.json` already auto-halts you at the first instruction of `reset_handler` on launch. So even with **zero** manual breakpoints, F5 will stop on line 21. The breakpoint on line 24 is what catches you *after* you press Continue.
+
+### Step 4 — press F5
+
+Hit **F5** (or **Run → Start Debugging** from the menu). You'll see, in order:
+
+1. The **build + flash task** runs — `make` compiles `main.s` → `main.o` → `main.elf` → `main.hex`, then `make flash` calls OpenOCD's `program` command to erase + write + verify the chip. This is configured by `"preLaunchTask": "flash current session"`, so you never debug a stale binary.
+2. **A second OpenOCD process starts** for the debug session itself (in a hidden "gdb-server" terminal at the bottom). It connects to the CMSIS-DAP probe, halts the M33, and listens on a private GDB port.
+3. **`arm-none-eabi-gdb` launches**, attaches to that OpenOCD, runs `monitor reset halt`, and **stops at `reset_handler`** (because `"runToEntryPoint": "reset_handler"` is set in `launch.json`).
+
+When the dust settles, the editor jumps to `main.s` with a yellow arrow on **line 21** (`nop`, the first instruction of `reset_handler`). **The chip is now frozen, waiting for you.**
+
+> **Why two OpenOCD processes?** The first one (from `make flash`) does erase+write+verify+reset+exit and goes away. The second one (spawned by cortex-debug) stays alive for the whole debug session as a GDB remote. The Silicon Labs–forked OpenOCD's flash driver doesn't accept GDB's own `vFlashErase` packet, so we use OpenOCD's `program` command via `make flash` instead and tell cortex-debug to skip its own load with `"loadFiles": []`.
+
+### Step 5 — explore the debug UI
+
+While halted, look at the left sidebar — these panels are now live:
+
+- **VARIABLES → CPU Core Register** — every Cortex-M33 register: `r0`–`r15`, `xPSR`, `MSP`, `PSP`, `CONTROL`, `PRIMASK`, `FAULTMASK`, `BASEPRI`. Updates after every halt.
+- **WATCH** — pin live expressions. Try adding `$pc`, `$sp`, `$lr`, `*0x08000000` (the first word of flash — should be the stack-top, `0x20040000`).
+- **CALL STACK** — currently just `reset_handler`. Will fill out once we use `bl` in Session 10.
+- **BREAKPOINTS** — your `b .` breakpoint, plus a checkbox to disable it without removing.
+
+The **debug toolbar** at the top (or **F-keys**) drives execution:
+
+| Key | Action | When you'd use it |
+|---|---|---|
+| **F5** | Continue | Run until next breakpoint (or forever, in our case). |
+| **F10** | Step Over | Execute one source line. |
+| **F11** | Step In | Step into a `bl` call (irrelevant here — no calls yet). |
+| **⇧F11** | Step Out | Run to the return of the current function. |
+| **⌘⇧F5** | Restart | Reset the chip and re-halt at `reset_handler`. |
+| **⇧F5** | Stop | End the debug session. The chip keeps running whatever was last flashed. |
+
+### Step 6 — single-step the reset handler
+
+You're halted on **line 21** (`nop`). Press **F10** three times and watch the yellow arrow walk down through:
+
+```asm
+21    nop          @ ← halted here on entry
+22    nop
+23    nop
+24    b   reset_handler   @ ← branches back to line 21 forever
+```
+
+Open **VARIABLES → CPU Core Register** and watch **`pc`** tick up by **2 bytes** per step — `0x08000008 → 0x0800000a → 0x0800000c → 0x0800000e` — because Thumb `nop` is a 16-bit instruction. The fourth step (the `b`) takes you back to `0x08000008`. You're now spinning the loop one orbit at a time.
+
+Watch **`xPSR`** while you step — its bit 24 (`T`, the Thumb bit) should stay set. If it ever clears, the next instruction would HardFault.
+
+### Step 7 — read flash live
+
+Open the **Memory** view: **⌘⇧P → "Cortex-Debug: View Memory"**, then enter address `0x08000000` and length `32`. You should see the bytes you decoded by hand earlier — `00 00 04 20 09 00 00 08 ...` — but read directly from the chip over SWD this time. You can also write memory from this view, though we won't here.
+
+### Step 8 — view the disassembly
+
+**⌘⇧P → "Open Disassembly View"**. VS Code drops you into a pane showing the actual machine code that's running, interleaved with your `.s` source. The yellow arrow tracks `pc`. This is the view you'll fall in love with as the programs get bigger — it's the one place where ARM Thumb encoding becomes concrete.
+
+### Step 9 — stop the session
+
+Press **⇧F5** (or click the red square on the toolbar). VS Code stops `gdb` and `openocd`. The chip keeps running your code — your infinite loop just continues spinning until the next reset or `make flash`.
+
+> **Gotcha — "Failed to launch OpenOCD":** check the **DEBUG CONSOLE** panel for the actual error. 99% of the time it's a wrong path. Open `.vscode/settings.json` and make sure `cortex-debug.openocdPath` points at the Silicon Labs–forked binary at `~/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd`.
+
+> **Gotcha — yellow arrow stuck on a line that isn't `reset_handler`:** you flashed once, didn't reset, and re-attached. Use **⌘⇧F5** (Restart) to force a reset-and-halt.
+
+> **Gotcha — breakpoint shows as a hollow grey circle:** the line you clicked has no instruction associated with it (it's a label, comment, blank, or the `.word` data in the vector table). GDB can't bind it. Move the breakpoint to a line that actually contains an instruction — use `arm-none-eabi-objdump --dwarf=decodedline main.elf` to list the breakpointable lines.
+
+> **Gotcha — `Error erasing flash with vFlashErase packet`:** the Silicon Labs–forked OpenOCD's flash driver does *not* implement GDB's `vFlashErase` remote-protocol packet, so cortex-debug's default GDB `load` path (`target-download`) fails. Our `launch.json` works around this by setting `"loadFiles": []` (skip GDB's load entirely) and `"preLaunchTask": "flash current session"` — which calls `make flash`, which uses OpenOCD's higher-level `program` command, which **does** work. If you fork this config and ever flip back to default behaviour, you'll see this error again.
+
+> **Gotcha — main.s opens as "Plain Text" with no colours:** the `dan-c-underwood.arm` extension isn't installed, *or* a competing entry in your User `settings.json` is mapping `*.s` to an unregistered language id. See **Prerequisites** above.
+
+### What's in `.vscode/`
+
+A quick reference for every non-obvious knob, so you can adapt this for your own projects later:
+
+#### `launch.json` (cortex-debug)
+
+| Field | Value | Why |
+|---|---|---|
+| `type` | `cortex-debug` | The marus25 extension that wires GDB ↔ OpenOCD ↔ VS Code. |
+| `servertype` | `openocd` | We use OpenOCD as the GDB remote (vs. J-Link, ST-Link, BMP, etc.). |
+| `serverpath` | `…/SiliconLabs/.../openocd` | The Silicon-Labs-forked binary. Vanilla openocd 0.12 lacks `target/efm32s2_g23.cfg` and can't program this chip. |
+| `searchDir` | the matching `share/openocd/scripts` | Tells OpenOCD where to find `interface/cmsis-dap.cfg` and `target/efm32s2_g23.cfg`. |
+| `configFiles` | `[interface/cmsis-dap.cfg, target/efm32s2_g23.cfg]` | The two scripts that describe our probe and our chip. |
+| `cwd`, `executable` | `${fileDirname}` | Where to find `main.elf`. *Dynamic* — whichever `main.s` is focused decides which session is debugged. |
+| `runToEntryPoint` | `reset_handler` | After connecting, halt at the first instruction of `reset_handler` instead of leaving the chip running. |
+| `preLaunchTask` | `flash current session` | Build + flash via `make` *before* the debug session starts, so the chip always has the latest binary. |
+| `loadFiles` | `[]` | Skip cortex-debug's own GDB-`load`/`vFlashErase` step (which the silabs OpenOCD doesn't accept). The `preLaunchTask` already programmed the chip. |
+| `showDevDebugOutput` | `raw` | Dump the GDB-MI traffic to the **DEBUG CONSOLE** panel — the first thing to read when something breaks. |
+
+#### `tasks.json`
+
+| Task | Command | When |
+|---|---|---|
+| `build current session` | `make` in `${fileDirname}` | Default build (⌘⇧B). |
+| `flash current session` | `make flash` (depends on build) | Used as the `preLaunchTask`. |
+| `clean current session` | `make clean` | Manual cleanup. |
+
+#### `settings.json`
+
+| Setting | Why |
+|---|---|
+| `cortex-debug.openocdPath` | Default global path used by the extension if `serverpath` weren't set in `launch.json`. Belt and braces. |
+| `cortex-debug.gdbPath` | `arm-none-eabi-gdb` from the homebrew toolchain. |
+| `cortex-debug.armToolchainPath` | Folder that contains `arm-none-eabi-*` (used to find `objdump`, `nm`, etc.). |
+| `files.associations` | `*.s,*.S → arm`, `*.ld → linkerscript`. Without `arm`, no syntax colour and (more importantly) the gutter clicks for breakpoints lose half their UX. |
+| `debug.allowBreakpointsEverywhere` | **Critical.** VS Code only lets you click breakpoints in files whose language id was registered as debuggable by some extension. Cortex-Debug registers C/C++ but **not `arm`**, so without this flag, gutter clicks on `main.s` are silently ignored. |
+| `C_Cpp.default.{compilerPath,intelliSenseMode}` | Just for IntelliSense in any C/C++ files (not used by the assembly debug flow). |
+
+---
+
 ## What you should remember
 
 - A bare-metal program needs **(1)** a vector table at `0x08000000` and **(2)** a reset handler.
 - The vector table's first word is the initial SP; the second is the reset handler address **with the Thumb bit set**.
 - Build pipeline: `as` → `ld` (with linker script) → `objcopy -O binary` → flash with **OpenOCD** over the on-board CMSIS-DAP probe.
 - The `KEEP(...)` directive prevents dead-stripping of the vector table.
+- **F5 in VS Code** does the whole thing — build, flash, halt at `reset_handler`. Set breakpoints in `main.s`, single-step with **F10**, watch every register update live in the *CPU Core Register* panel.
 
 ---
 

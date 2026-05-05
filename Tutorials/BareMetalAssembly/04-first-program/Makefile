@@ -26,33 +26,33 @@ OPENOCD     ?= $(SILABS_OOCD)/bin/openocd
 OPENOCD_SCRIPTS ?= $(SILABS_OOCD)/share/openocd/scripts
 OPENOCD_FLAGS   ?= -s $(OPENOCD_SCRIPTS) -f interface/cmsis-dap.cfg -f target/efm32s2_g23.cfg
 
-ASFLAGS := -mcpu=cortex-m33 -mthumb -g
+ASFLAGS := -mcpu=cortex-m33 -mthumb -gdwarf-5
 LDFLAGS := -T linker.ld --no-warn-rwx-segments
 
 all: main.bin
 
 main.o: main.s
-$(AS) $(ASFLAGS) $< -o $@
+	$(AS) $(ASFLAGS) $< -o $@
 
 main.elf: main.o linker.ld
-$(LD) $(LDFLAGS) main.o -o $@
+	$(LD) $(LDFLAGS) main.o -o $@
 
 main.bin: main.elf
-$(OBJCOPY) -O binary $< $@
+	$(OBJCOPY) -O binary $< $@
 
 main.hex: main.elf
-$(OBJCOPY) -O ihex $< $@
+	$(OBJCOPY) -O ihex $< $@
 
 disasm: main.elf
-$(OBJDUMP) -d $<
+	$(OBJDUMP) -d $<
 
 flash: main.hex
-$(OPENOCD) $(OPENOCD_FLAGS) -c "init; reset_config srst_nogate; reset halt; program $< verify; reset; exit"
+	$(OPENOCD) $(OPENOCD_FLAGS) -c "init; reset_config srst_nogate; reset halt; program $< verify; reset; exit"
 
 gdbserver: main.elf
-$(OPENOCD) $(OPENOCD_FLAGS) -c "init; reset_config srst_nogate"
+	$(OPENOCD) $(OPENOCD_FLAGS) -c "init; reset_config srst_nogate"
 
 clean:
-rm -f main.o main.elf main.bin main.hex
+	rm -f main.o main.elf main.bin main.hex
 
 .PHONY: all clean flash disasm gdbserver
