@@ -227,11 +227,13 @@ A **solid red dot** appears. That's a bound breakpoint. Cortex-Debug supports up
 
 Hit **F5** (or **Run → Start Debugging** from the menu). You'll see, in order:
 
-1. The **build task** runs — `make` compiles `main.s` → `main.o` → `main.elf`. This is configured by `"preLaunchTask": "build"` in `launch.json`, so you never debug a stale binary.
-2. **OpenOCD starts** (in a hidden "gdb-server" terminal at the bottom). It connects to the CMSIS-DAP probe, halts the M33, and listens on port 3333. You should see the same banner you saw with `make flash` — `Cortex-M33 r0p4 processor detected`, `flash size = 1536 KiB`, `** Verified OK **`.
-3. **`arm-none-eabi-gdb` launches**, attaches to OpenOCD on `:3333`, flashes a fresh `main.elf`, resets the chip, and **halts at `reset_handler`** (because `"runToEntryPoint": "reset_handler"` is set in `launch.json`).
+1. The **build + flash task** runs — `make` compiles `main.s` → `main.o` → `main.elf` → `main.hex`, then `make flash` calls OpenOCD's `program` command to erase + write + verify the chip. This is configured by `"preLaunchTask": "flash current session"` (or `"flash"` from the per-session config), so you never debug a stale binary.
+2. **A second OpenOCD process starts** for the debug session itself (in a hidden "gdb-server" terminal at the bottom). It connects to the CMSIS-DAP probe, halts the M33, and listens on a private GDB port.
+3. **`arm-none-eabi-gdb` launches**, attaches to that OpenOCD, runs `monitor reset halt`, and **stops at `reset_handler`** (because `"runToEntryPoint": "reset_handler"` is set in `launch.json`).
 
-When the dust settles, the editor jumps to `main.s` with a yellow arrow on the first instruction of `reset_handler`. **The chip is now frozen, waiting for you.**
+When the dust settles, the editor jumps to `main.s` with a yellow arrow on **line 21** (`nop`, the first instruction of `reset_handler`). **The chip is now frozen, waiting for you.**
+
+> **Why two OpenOCD processes?** The first one (from `make flash`) does erase+write+verify+reset+exit and goes away. The second one (spawned by cortex-debug) stays alive for the whole debug session as a GDB remote. The Silicon Labs–forked OpenOCD's flash driver doesn't accept GDB's own `vFlashErase` packet, so we use OpenOCD's `program` command via `make flash` instead and tell cortex-debug to skip its own load with `"loadFiles": []`.
 
 ### Step 5 — explore the debug UI
 

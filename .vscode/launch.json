@@ -16,8 +16,9 @@
         "interface/cmsis-dap.cfg",
         "target/efm32s2_g23.cfg"
       ],
+      "loadFiles": [],
       "runToEntryPoint": "reset_handler",
-      "preLaunchTask": "build current session",
+      "preLaunchTask": "flash current session",
       "showDevDebugOutput": "raw"
     },
     {
