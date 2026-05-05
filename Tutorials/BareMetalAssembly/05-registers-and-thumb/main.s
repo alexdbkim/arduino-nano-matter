@@ -11,9 +11,9 @@
     .global  reset_handler
 reset_handler:
     ldr     r0, =0x20000000     @ r0 = pointer to first word of RAM
-    mov     r1, #7
-    mov     r2, #11
-    mov     r3, #23
+    mov     r1, #1
+    mov     r2, #2
+    mov     r3, #3
     add     r1, r1, r2          @ r1 = 18
     add     r1, r1, r3          @ r1 = 41
     str     r1, [r0]            @ *0x20000000 = 41
