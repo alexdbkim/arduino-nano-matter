@@ -193,15 +193,20 @@ You should see something like `/dev/cu.usbmodem9FA69C6B3`. If it's missing, the 
 
 ### Step 3 — set a breakpoint
 
-Open `main.s`. Click in the **gutter** (the empty space just left of the line numbers) next to this line:
+Open `main.s`. Click in the **gutter** (the empty space just left of the line numbers) next to **line 24**, the `b reset_handler` instruction:
 
 ```asm
-    b .                @ infinite loop: branch-to-self
+21    nop
+22    nop
+23    nop
+24    b   reset_handler   @ infinite loop
 ```
 
-A **red dot** appears. That's a breakpoint. Cortex-Debug supports up to **8 hardware breakpoints** simultaneously on this chip — more than you'll ever need.
+A **solid red dot** appears. That's a bound breakpoint. Cortex-Debug supports up to **8 hardware breakpoints** simultaneously on this chip — more than you'll ever need.
 
-> **First-time tip:** breakpoints work on assembly source lines as long as you assembled with `-g` (the Makefile already does). The mapping is recorded in the ELF's DWARF debug info.
+> **The #1 reason breakpoints "don't work":** you clicked a line that has **no instruction** — the `reset_handler:` label (line 20), the vector-table data (lines 10–11), a comment, or a blank. GDB has no address to bind to, so VS Code shows a **hollow grey circle** instead of a solid red dot, and the chip flies right past it. **Only click on lines with an actual instruction** (`nop`, `b`, `mov`, etc.). You can verify which lines map to instructions by running `arm-none-eabi-objdump --dwarf=decodedline main.elf` — only those line numbers are breakpointable.
+
+> **Also:** `runToEntryPoint: reset_handler` in `launch.json` already auto-halts you at the first instruction of `reset_handler` on launch. So even with **zero** manual breakpoints, F5 will stop on line 21. The breakpoint on line 24 is what catches you *after* you press Continue.
 
 ### Step 4 — press F5
 
@@ -235,15 +240,18 @@ The **debug toolbar** at the top (or **F-keys**) drives execution:
 
 ### Step 6 — single-step the reset handler
 
-Press **F10** twice. You should see the yellow arrow advance through:
+You're halted on **line 21** (`nop`). Press **F10** three times and watch the yellow arrow walk down through:
 
 ```asm
-    ldr     r0, =__data_load   @ (we don't have this yet — for now it's just the b .)
-loop:
-    b       loop
+21    nop          @ ← halted here on entry
+22    nop
+23    nop
+24    b   reset_handler   @ ← branches back to line 21 forever
 ```
 
-Open **VARIABLES → CPU Core Register** and watch **`pc`** tick up by **2 bytes** per step (Thumb-2 short instructions are 16-bit). Watch **`xPSR`** — its top bit (`T`, bit 24) should be set, confirming the core really is in Thumb mode. If it ever clears, you'd hit a HardFault on the next instruction.
+Open **VARIABLES → CPU Core Register** and watch **`pc`** tick up by **2 bytes** per step — `0x08000008 → 0x0800000a → 0x0800000c → 0x0800000e` — because Thumb `nop` is a 16-bit instruction. The fourth step (the `b`) takes you back to `0x08000008`. You're now spinning the loop one orbit at a time.
+
+Watch **`xPSR`** while you step — its bit 24 (`T`, the Thumb bit) should stay set. If it ever clears, the next instruction would HardFault.
 
 ### Step 7 — read flash live
 
@@ -261,7 +269,7 @@ Press **⇧F5** (or click the red square on the toolbar). VS Code stops `gdb` an
 
 > **Gotcha — yellow arrow stuck on a line that isn't `reset_handler`:** you flashed once, didn't reset, and re-attached. Use **⌘⇧F5** (Restart) to force a reset-and-halt.
 
-> **Gotcha — breakpoint shows as a hollow circle:** the address didn't get programmed because flash hasn't been written, or you set a breakpoint in a region not in your binary. Run **build** + **F5** once first, then set the breakpoint on a real source line.
+> **Gotcha — breakpoint shows as a hollow grey circle:** the line you clicked has no instruction associated with it (it's a label, comment, blank, or the `.word` data in the vector table). GDB can't bind it. Move the breakpoint to a line that actually contains an instruction — use `arm-none-eabi-objdump --dwarf=decodedline main.elf` to list the breakpointable lines.
 
 ---
 

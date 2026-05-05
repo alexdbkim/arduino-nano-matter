@@ -26,7 +26,7 @@ OPENOCD     ?= $(SILABS_OOCD)/bin/openocd
 OPENOCD_SCRIPTS ?= $(SILABS_OOCD)/share/openocd/scripts
 OPENOCD_FLAGS   ?= -s $(OPENOCD_SCRIPTS) -f interface/cmsis-dap.cfg -f target/efm32s2_g23.cfg
 
-ASFLAGS := -mcpu=cortex-m33 -mthumb -g
+ASFLAGS := -mcpu=cortex-m33 -mthumb -gdwarf-5
 LDFLAGS := -T linker.ld --no-warn-rwx-segments
 
 all: main.bin

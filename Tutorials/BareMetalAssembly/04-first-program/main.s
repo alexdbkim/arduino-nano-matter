@@ -18,4 +18,7 @@
     .thumb_func
     .global  reset_handler
 reset_handler:
+    nop
+    nop
+    nop
     b       reset_handler
