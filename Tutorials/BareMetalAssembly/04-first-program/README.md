@@ -170,16 +170,29 @@ You should already have these from Session 02:
 
 You don't need to configure anything — `04-first-program/.vscode/{launch,settings,tasks}.json` are already wired up for you.
 
-### Step 1 — open this folder as the workspace
+### Step 1 — open a workspace that has `.vscode/`
 
-From a terminal:
+You have two equally valid options:
+
+**Option A — open the session folder (simplest):**
 
 ```sh
 cd 04-first-program
 code .
 ```
 
-The folder must be the workspace root. If you open the parent `BareMetalAssembly/` folder, VS Code won't find `.vscode/launch.json`.
+VS Code uses `04-first-program/.vscode/launch.json`, which hardcodes this session.
+
+**Option B — open the repo root (so you can navigate all sessions):**
+
+```sh
+cd /path/to/arduino-nano-matter
+code .
+```
+
+VS Code uses the repo-root `.vscode/launch.json`, which is dynamic — it reads the folder of **whichever `main.s` is currently focused** in the editor (`${fileDirname}`) and debugs *that* session. So when you're in `04-first-program/main.s` and press F5, it builds and debugs Session 04; switch to `05-.../main.s` and F5 builds and debugs Session 05.
+
+> **If F5 just opens an empty `launch.json`** with `"type": "lldb"` and `<your program>`, you opened a folder that has no `.vscode/` at all and VS Code auto-generated a stub. Close that file *without* saving, then open one of the two folders above.
 
 ### Step 2 — verify the probe is alive
 
