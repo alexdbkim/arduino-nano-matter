@@ -156,12 +156,122 @@ If you see `** Programming Finished **` and `** Verified OK **` near the end, yo
 
 ---
 
+## Break into the board from VS Code (step-by-step)
+
+Flashing from the command line is great. But the real superpower is **stopping the chip on a specific instruction and poking at it live** — registers, memory, the works. Here is exactly how to do that in VS Code, the first time.
+
+### Prerequisites (one-time)
+
+You should already have these from Session 02:
+
+- The **Arduino IDE + Silicon Labs core** installed (gives us the working OpenOCD at `~/Library/Arduino15/.../0.12.0-arduino1-static/`).
+- VS Code extensions: **C/C++** (Microsoft), **Cortex-Debug** (marus25), and **ARM** (dan-c-underwood).
+- The board plugged in via a **data** USB-C cable.
+
+You don't need to configure anything — `04-first-program/.vscode/{launch,settings,tasks}.json` are already wired up for you.
+
+### Step 1 — open this folder as the workspace
+
+From a terminal:
+
+```sh
+cd 04-first-program
+code .
+```
+
+The folder must be the workspace root. If you open the parent `BareMetalAssembly/` folder, VS Code won't find `.vscode/launch.json`.
+
+### Step 2 — verify the probe is alive
+
+Open the integrated terminal (**⌃`**) and run:
+
+```sh
+ls /dev/cu.usbmodem*
+```
+
+You should see something like `/dev/cu.usbmodem9FA69C6B3`. If it's missing, the board isn't enumerating — re-seat the cable before going further. Don't waste 30 minutes debugging "Cortex-Debug failed to launch" when the actual problem is USB.
+
+### Step 3 — set a breakpoint
+
+Open `main.s`. Click in the **gutter** (the empty space just left of the line numbers) next to this line:
+
+```asm
+    b .                @ infinite loop: branch-to-self
+```
+
+A **red dot** appears. That's a breakpoint. Cortex-Debug supports up to **8 hardware breakpoints** simultaneously on this chip — more than you'll ever need.
+
+> **First-time tip:** breakpoints work on assembly source lines as long as you assembled with `-g` (the Makefile already does). The mapping is recorded in the ELF's DWARF debug info.
+
+### Step 4 — press F5
+
+Hit **F5** (or **Run → Start Debugging** from the menu). You'll see, in order:
+
+1. The **build task** runs — `make` compiles `main.s` → `main.o` → `main.elf`. This is configured by `"preLaunchTask": "build"` in `launch.json`, so you never debug a stale binary.
+2. **OpenOCD starts** (in a hidden "gdb-server" terminal at the bottom). It connects to the CMSIS-DAP probe, halts the M33, and listens on port 3333. You should see the same banner you saw with `make flash` — `Cortex-M33 r0p4 processor detected`, `flash size = 1536 KiB`, `** Verified OK **`.
+3. **`arm-none-eabi-gdb` launches**, attaches to OpenOCD on `:3333`, flashes a fresh `main.elf`, resets the chip, and **halts at `reset_handler`** (because `"runToEntryPoint": "reset_handler"` is set in `launch.json`).
+
+When the dust settles, the editor jumps to `main.s` with a yellow arrow on the first instruction of `reset_handler`. **The chip is now frozen, waiting for you.**
+
+### Step 5 — explore the debug UI
+
+While halted, look at the left sidebar — these panels are now live:
+
+- **VARIABLES → CPU Core Register** — every Cortex-M33 register: `r0`–`r15`, `xPSR`, `MSP`, `PSP`, `CONTROL`, `PRIMASK`, `FAULTMASK`, `BASEPRI`. Updates after every halt.
+- **WATCH** — pin live expressions. Try adding `$pc`, `$sp`, `$lr`, `*0x08000000` (the first word of flash — should be the stack-top, `0x20040000`).
+- **CALL STACK** — currently just `reset_handler`. Will fill out once we use `bl` in Session 10.
+- **BREAKPOINTS** — your `b .` breakpoint, plus a checkbox to disable it without removing.
+
+The **debug toolbar** at the top (or **F-keys**) drives execution:
+
+| Key | Action | When you'd use it |
+|---|---|---|
+| **F5** | Continue | Run until next breakpoint (or forever, in our case). |
+| **F10** | Step Over | Execute one source line. |
+| **F11** | Step In | Step into a `bl` call (irrelevant here — no calls yet). |
+| **⇧F11** | Step Out | Run to the return of the current function. |
+| **⌘⇧F5** | Restart | Reset the chip and re-halt at `reset_handler`. |
+| **⇧F5** | Stop | End the debug session. The chip keeps running whatever was last flashed. |
+
+### Step 6 — single-step the reset handler
+
+Press **F10** twice. You should see the yellow arrow advance through:
+
+```asm
+    ldr     r0, =__data_load   @ (we don't have this yet — for now it's just the b .)
+loop:
+    b       loop
+```
+
+Open **VARIABLES → CPU Core Register** and watch **`pc`** tick up by **2 bytes** per step (Thumb-2 short instructions are 16-bit). Watch **`xPSR`** — its top bit (`T`, bit 24) should be set, confirming the core really is in Thumb mode. If it ever clears, you'd hit a HardFault on the next instruction.
+
+### Step 7 — read flash live
+
+Open the **Memory** view: **⌘⇧P → "Cortex-Debug: View Memory"**, then enter address `0x08000000` and length `32`. You should see the bytes you decoded by hand earlier — `00 00 04 20 09 00 00 08 ...` — but read directly from the chip over SWD this time. You can also write memory from this view, though we won't here.
+
+### Step 8 — view the disassembly
+
+**⌘⇧P → "Open Disassembly View"**. VS Code drops you into a pane showing the actual machine code that's running, interleaved with your `.s` source. The yellow arrow tracks `pc`. This is the view you'll fall in love with as the programs get bigger — it's the one place where ARM Thumb encoding becomes concrete.
+
+### Step 9 — stop the session
+
+Press **⇧F5** (or click the red square on the toolbar). VS Code stops `gdb` and `openocd`. The chip keeps running your code — your infinite loop just continues spinning until the next reset or `make flash`.
+
+> **Gotcha — "Failed to launch OpenOCD":** check the **DEBUG CONSOLE** panel for the actual error. 99% of the time it's a wrong path. Open `.vscode/settings.json` and make sure `cortex-debug.openocdPath` points at the Silicon Labs–forked binary at `~/Library/Arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static/bin/openocd`.
+
+> **Gotcha — yellow arrow stuck on a line that isn't `reset_handler`:** you flashed once, didn't reset, and re-attached. Use **⌘⇧F5** (Restart) to force a reset-and-halt.
+
+> **Gotcha — breakpoint shows as a hollow circle:** the address didn't get programmed because flash hasn't been written, or you set a breakpoint in a region not in your binary. Run **build** + **F5** once first, then set the breakpoint on a real source line.
+
+---
+
 ## What you should remember
 
 - A bare-metal program needs **(1)** a vector table at `0x08000000` and **(2)** a reset handler.
 - The vector table's first word is the initial SP; the second is the reset handler address **with the Thumb bit set**.
 - Build pipeline: `as` → `ld` (with linker script) → `objcopy -O binary` → flash with **OpenOCD** over the on-board CMSIS-DAP probe.
 - The `KEEP(...)` directive prevents dead-stripping of the vector table.
+- **F5 in VS Code** does the whole thing — build, flash, halt at `reset_handler`. Set breakpoints in `main.s`, single-step with **F10**, watch every register update live in the *CPU Core Register* panel.
 
 ---
 
