@@ -14,6 +14,8 @@
 TBH   [<Rn>, <Rm>, LSL #1]
 ```
 
+**When you'd actually use this**: `TBH` is the compiler's choice when a `switch` either has more than ~250 cases or has case bodies large enough that a `TBB` table can't reach (510-byte ceiling). Without `TBH`, those switches would have to spill to a word table with an explicit indirect load — bigger and slower. The 128 KB reach is plenty for any realistic firmware. Same gotchas as `TBB`: no bounds check (always `CMP`+`BHI` first), forward-only, and the table must be halfword-aligned (the assembler does this for `.short` automatically, but a stray `.byte` before it will misalign and trip a `UsageFault (UNALIGNED)` if `CCR.UNALIGN_TRP = 1`).
+
 `TBH` is the wider sibling of `TBB`. It reads one *halfword* from `(<Rn> + (<Rm> << 1))`, multiplies that halfword by 2, and adds the result to the PC. The branch is forward-only with a maximum reach of `65535 × 2 = 131070` bytes (~128 KB) from the table — enough for switches whose case bodies are larger than 510 bytes total or where there are more than ~250 cases.
 
 Each table entry is `(target − table_base) / 2` stored as `.short`. As with `TBB`, `<Rn> = PC` means "table follows the instruction"; that is the common form.
@@ -52,6 +54,8 @@ PC     = PC + (offset << 1)
 - `UsageFault (UNALIGNED)` if `CCR.UNALIGN_TRP = 1` and the table base is not halfword-aligned. Always `.align 1` (or better, `.align 2`) the table.
 
 ## Example
+
+### Example 1 — 4-way switch with .short offsets
 
 ```asm
     .syntax unified
@@ -99,6 +103,47 @@ loop:
 5. `.align 1` — keeps the case bodies halfword-aligned, required because the table value is multiplied by 2.
 
 Use `TBH` over `TBB` when you have many cases or large case bodies; otherwise `TBB`'s 4-bytes-per-entry savings are usually worth it.
+
+### Example 2 — 3-way TBH switch
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #2          @ pick case 2
+    cmp     r0, #2
+    bhi     .Ldefault
+    tbh     [pc, r0, lsl #1]
+.Ltable:
+    .short  (.Lc0 - .Ltable) / 2
+    .short  (.Lc1 - .Ltable) / 2
+    .short  (.Lc2 - .Ltable) / 2
+.Lc0:
+    movs    r1, #11
+    b       .Ldone
+.Lc1:
+    movs    r1, #22
+    b       .Ldone
+.Lc2:
+    movs    r1, #33
+    b       .Ldone
+.Ldefault:
+    movs    r1, #0
+.Ldone:
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `bhi .Ldefault` — explicit upper-bound check; `TBH` won't do it.
+2. `tbh [pc, r0, lsl #1]` — `r0 << 1` is the byte offset into the halfword table; one halfword is loaded, doubled, and added to PC.
+3. `.short (.Lc2 - .Ltable) / 2` — entry 2's value is the halved byte distance from the table to `.Lc2`. Runtime `<<1` reverses the `/2`, giving up to 128 KB of forward reach.
+4. The table is implicitly halfword-aligned because each entry is `.short`; no `.align` is needed *before* it as long as the previous instruction is 32-bit aligned (the `tbh` itself is a 32-bit instruction, so we're fine).
+5. `movs r1, #33` — case 2 runs.
 
 ## See also
 

@@ -14,6 +14,8 @@
 USUB8 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `USUB8` is most often run for its flags rather than its result: `USUB8 t, a, b; SEL r, a, b` is the canonical 2-instruction byte-wise unsigned max. **One `APSR.GE` bit is written per byte lane — set when that lane did not borrow (i.e. `Rn ≥ Rm`)** — and `SEL` consumes those bits to mux 4 byte lanes between `Rn` and `Rm` in a single instruction. Vectorized min/max/abs of RGBA pixels, per-byte clamping, and motion-detection deltas all become two-instruction sequences. Without `GE`+`SEL` the same logic runs ~10 scalar instructions with conditional branches.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — Per-pixel grayscale frame diff
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -79,6 +83,34 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `usub8 r0, r1, r2` treats each register as 4 packed byte lanes and subtracted them lane-by-lane.
 3. `APSR.GE` bits flag the lanes whose unsigned subtract had **no borrow** (i.e. `Rn ≥ Rm`).
+
+### Example 2 — Byte-wise max of two RGBA pixels via SEL
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Per-channel max of two RGBA pixels (R,G,B,A packed as 4 unsigned bytes).
+    @ Useful for additive sprite blending / "lighten" mode.
+    movw    r1, #0x4080              @ pixel A: B=0x80, G=0x40 (low half)
+    movt    r1, #0x10F0              @           A=0x10, R=0xF0 (high half)
+    movw    r2, #0xA020              @ pixel B
+    movt    r2, #0x40C0
+    usub8   r3, r1, r2               @ r3 discarded; APSR.GE[i]=1 iff lane_i of r1 ≥ r2
+    sel     r0, r1, r2               @ r0 = byte-wise max(r1, r2) — RGBA "lighten" blend
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `USUB8` subtracts pixel B from A across all 4 channels. We don't care about the differences — only the per-lane `APSR.GE` flags.
+2. For each byte lane, `GE` is set when A ≥ B (no borrow), cleared when B was bigger.
+3. `SEL r0, r1, r2` reads the 4 GE bits and picks A on lanes where it won, B otherwise → the per-channel max.
+4. That's the entire "lighten" compositor in **two cycles** for 4 channels at once. The naive scalar version is ~10 instructions with 4 conditional branches.
 
 ## See also
 

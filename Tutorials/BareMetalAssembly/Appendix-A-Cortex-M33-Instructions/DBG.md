@@ -14,6 +14,8 @@
 DBG #<option>          @ <option> is a 4-bit immediate, 0..15
 ```
 
+**When you'd actually use this** — almost never on the Nano Matter. `DBG #imm` is a hint to the debug architecture; on Cortex-M33 it executes as a NOP at runtime but its encoding survives in disassembly so external trace tooling (ETM, ITM postprocessors) can recognise the marker. If you actually want to emit trace markers from running code, the ITM stimulus port (`ITM->PORT[n]`) is far more useful and observable from a SWD debugger — `DBG` is mostly a portability artefact you'll see when reading code written for other Arm cores.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -51,6 +53,8 @@ No 16-bit form.
 
 ## Example
 
+### Example 1 — bracket a measured region with DBG markers
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,32 @@ do_work:
 3. `dbg #1` — closing marker.
 
 In practice, on the Nano Matter you'll get more mileage from the ITM (`STIM` registers) for trace markers. `DBG` is mostly a portability artefact — keep it in mind when reading disassembly from other Arm cores.
+
+### Example 2 — bracket a critical section for ETM dwell-time analysis
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Surround a critical region with DBG markers so an ETM trace
+    @ tool can later compute the dwell time precisely
+    dbg     #2                      @ "critical-region begin"
+    cpsid   i
+    @ … RMW on shared state …
+    cpsie   i
+    dbg     #3                      @ "critical-region end"
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `dbg #2` — encoded into the stream; on M33 it's a runtime NOP but ETM tooling can spot the encoding and timestamp it.
+2. The actual critical section (`cpsid i` … `cpsie i`).
+3. `dbg #3` — closing marker. With both timestamps the trace tool can report exact dwell time without instrumentation overhead. In practice you'd reach for the ITM stimulus port instead — it's observable live over SWO — and `DBG` stays as a curiosity.
 
 ## See also
 

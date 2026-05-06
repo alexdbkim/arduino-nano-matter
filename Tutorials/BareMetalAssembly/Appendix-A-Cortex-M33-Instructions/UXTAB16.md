@@ -14,6 +14,8 @@
 UXTAB16  <Rd>, <Rn>, <Rm>{, ROR #<amount>}
 ```
 
+**When you'd actually use this** is the *vectorised* RGBA channel accumulator: lane 0 of `Rm` (byte [7:0]) and lane 2 (byte [23:16]) — which in a little-endian RGBA layout are the R and B channels of a pixel — get zero-extended to 16 bits and added into two parallel halfword accumulators in one cycle. A second `UXTAB16` with `ROR #8` picks up G and A. So two instructions accumulate R, G, B and A of a pixel into four 16-bit running sums — versus eight scalar `UXTB`/`ADD`s and several scratch registers. This is the inner step of fast image-statistics, white-balance, and Bayer-channel summation kernels.
+
 SIMD form: take bytes [7:0] and [23:16] from the rotated `Rm`, zero-extend each to 16 bits, then add them lane-wise to the two halfwords of `Rn`. The unsigned twin of `SXTAB16`.
 
 ## Operands
@@ -58,6 +60,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — widening two unsigned bytes into halfword accumulators
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -81,6 +85,36 @@ loop:
 2. `uxtab16 r2, r0, r1` — bytes 0 and 2 of `r1` are zero-extended to halfwords (64 and 128) and added to the matching halves of `r0`. Two byte→halfword promotions and two adds for the price of one instruction.
 
 Two `UXTAB16` calls — one with `ROR #0`, one with `ROR #8` — process all four bytes of a packed-pixel word into four halfword accumulators (using two destination registers).
+
+### Example 2 — accumulating R and B channels of an RGBA pixel pair
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Image stats: sum R and B channels across two RGBA pixels into two
+    @ parallel 16-bit lanes (lane0 = ΣR, lane2 = ΣB). One UXTAB16 per pixel.
+    @ Little-endian RGBA: byte0=R, byte1=G, byte2=B, byte3=A.
+    ldr     r0, =0x00000000      @ r0 = [ΣB | ΣR] running halfword sums
+    ldr     r1, =0x80FF40C0      @ pixel #1: R=0xC0, G=0x40, B=0xFF, A=0x80
+    uxtab16 r0, r0, r1           @ ΣR += 0xC0,  ΣB += 0xFF
+    ldr     r1, =0x40AA20F0      @ pixel #2: R=0xF0, G=0x20, B=0xAA, A=0x40
+    uxtab16 r0, r0, r1           @ ΣR += 0xF0,  ΣB += 0xAA
+    @ ΣR = 0xC0 + 0xF0 = 0x01B0 (lane0)
+    @ ΣB = 0xFF + 0xAA = 0x01A9 (lane2)
+    @ r0 = 0x01A9_01B0
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` packs two halfword accumulators side-by-side: lane 0 (`ΣR`) and lane 2 (`ΣB`). Lane 1 / lane 3 of `r0` are unused — UXTAB16 only touches lanes 0 and 2.
+2. Each `uxtab16` zero-extends the R byte (bits [7:0]) and B byte (bits [23:16]) of the source pixel and lane-wise adds to `r0` — one cycle for two byte-widens and two halfword-adds.
+3. To sum G and A in parallel, run another `uxtab16 r2, r2, r1, ror #8` with `r2` holding `[ΣA | ΣG]`. Two instructions per pixel, four channels, no scratch register. Compare the scalar version: eight `UXTB`/`ADD`s plus shifts.
 
 ## See also
 

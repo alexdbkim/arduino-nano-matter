@@ -16,6 +16,8 @@ SBFX{<cond>} <Rd>, <Rn>, #<lsb>, #<width>
 
 Copies `<width>` bits starting at bit `<lsb>` of `<Rn>` into the bottom of `<Rd>`, then sign-extends from the top of the extracted field to fill bits 31..`<width>`.
 
+**When you'd actually use this** — pulling a *signed* packed sample out of a register: a 12-bit signed ADC reading inside a 16-bit half-word, a signed temperature delta inside a status register, or a signed coefficient packed alongside flags. `SBFX` does the extract and the sign extension in one instruction; the alternative is `LSL` to push the field's sign bit up to bit 31 followed by an arithmetic `ASR` to drag it back — two instructions and easy to get the shift counts wrong. Use `UBFX` instead when the field is unsigned.
+
 ## Operands
 
 | Field     | Type        | Constraints                                       |
@@ -55,6 +57,8 @@ No 16-bit encoding.
 
 ## Example
 
+### Example 1 — extract a signed 12-bit ADC sample
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -82,6 +86,29 @@ loop:
 3. `sbfx r3, r2, #4, #12` — same operation on a positive field. Bit 11 of the extracted field is `0`, so the upper bits are zeroed. Result is `+0x123`.
 
 Use `SBFX` whenever you'd otherwise do `LSL` to push the field's sign bit to bit 31 followed by an arithmetic `ASR` to bring it back. One instruction, no shift chain.
+
+### Example 2 — decode a signed 10-bit temperature delta from a CSR
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ A sensor packs a signed 10-bit temperature delta into bits [13:4]
+    @ of its status register, alongside flag bits in [3:0] and metadata
+    @ in [31:14]. We want the delta as a proper 32-bit signed int.
+    ldr     r0, =0x00003FF0      @ bits [13:4] = 0x3FF, the most-negative 10-bit value
+    sbfx    r1, r0, #4, #10      @ r1 = 0xFFFFFFFF (= -1 as a signed 10-bit value)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `ldr r0, =0x00003FF0` — bits [13:4] hold `0x3FF`, which as a 10-bit two's-complement value is `-1`.
+2. `sbfx r1, r0, #4, #10` — extracts those 10 bits, then notices the top bit of the field (bit 9) is 1 and fills bits 31..10 of `r1` with ones. Result: `0xFFFFFFFF`, the correctly sign-extended `-1`. If you had used `UBFX` instead you'd get `0x000003FF` (=`+1023`), which is the wrong number for a signed reading.
 
 ## See also
 

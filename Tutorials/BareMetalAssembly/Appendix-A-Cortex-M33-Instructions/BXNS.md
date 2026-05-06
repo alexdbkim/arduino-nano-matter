@@ -18,6 +18,8 @@ BXNS  <Rm>
 
 The branch target is `Rm`. Bit[0] of `Rm` selects the destination security state: **0 = Non-secure**, 1 = Secure (i.e. a normal `BX` semantics, no state change). For the typical "return to Non-secure" case, bit[0] must be **0**.
 
+**When you'd actually use this:** `BXNS` is what a Cortex-M33 secure-callable uses to **return** to its Non-secure caller — and is also how Secure code forward-jumps into Non-secure code without expecting a result back (e.g. handing control from secure boot to the Non-secure reset vector). On the Arduino Nano Matter, every Silicon Labs Secure Library veneer ends with `bxns lr` so control rejoins the Matter / Bluetooth stack running in Non-secure state. The alternative is fatal: a plain `BX LR` would leave the core in Secure state while executing a Non-secure-tagged target, and the SAU would raise SecureFault on the very next fetch. Bit 0 of the target chooses the destination state — that's why veneers usually `BIC` it to be safe before issuing the branch.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -60,6 +62,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — Returning a Secure result to the Non-secure caller
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -88,6 +92,29 @@ loop:
 4. `bxns lr` — branches to `LR`, scrubs caller-saved Secure registers per the calling convention, and drops the core into Non-secure state. The Non-secure caller resumes as if a normal function returned.
 
 This is the part that bites people: if you accidentally use plain `BX LR` here, you stay in Secure state and start executing Non-secure-addressed code with Secure privileges — the SAU then raises a SecureFault. Always `BXNS` on the way out.
+
+### Example 2 — Secure boot hands control to the Non-secure world
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Illustrative — full use requires a CMSE-enabled toolchain build.
+    @ BXNS demo 2: Secure boot jumps to the Non-secure reset handler.
+    ldr     r0, =0x00040000     @ start of the NS image (defined by the SAU)
+    ldr     r1, [r0, #4]        @ fetch NS reset-vector entry
+    bic     r1, r1, #1          @ bit[0]=0 -> destination is Non-secure
+    ldr     r2, [r0]             @ NS initial SP (illustrative; MSP_NS in real code)
+    msr     msp_ns, r2          @ load Non-secure Main SP
+    bxns    r1                  @ leap into Non-secure: never returns here
+loop:
+    b       loop
+```
+
+**Walkthrough:** Secure boot finishes its work, locates the Non-secure image's vector table, and reads the NS reset entry point. We force bit 0 clear so `BXNS` performs a Secure→Non-secure state transition (rather than acting like a plain `BX`). After staging the NS Main Stack Pointer with `msr msp_ns`, `bxns r1` jumps and switches state in one atomic step. This is the canonical "boot the Non-secure world" sequence — and the only way to do it safely. A `BX r1` instead would simply continue in Secure state at an NS-tagged address, instantly faulting.
 
 ## See also
 

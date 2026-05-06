@@ -16,6 +16,8 @@ SEL  <Rd>, <Rn>, <Rm>
 
 Per byte lane, copy the byte from `Rn` if the corresponding `APSR.GE` bit is set, otherwise copy the byte from `Rm`. Four 1-bit GE flags, four byte lanes — they line up exactly. This is the second half of every "compare-then-blend" pattern in DSP code.
 
+**When you'd actually use this** — `SEL` only ever follows a parallel-add/sub that set the GE flags (`SADD8`, `SSUB8`, `SADD16`, `SSUB16`, and unsigned variants). The pair lets you do per-lane min, max, clamp, or conditional blend in two instructions — the building block of saturating SIMD code, vector compare-and-pick, and the per-byte "pick whichever sample passed the threshold" patterns inside small DSP routines. The scalar alternative is a per-lane unpack-compare-pack loop; `SADD8`+`SEL` flattens that into 2 cycles of work for 4 lanes.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -60,6 +62,8 @@ For 16-bit SIMD ops (`SADD16` / `SSUB16` / …), the GE flags come in pairs: GE[
 
 ## Example
 
+### Example 1 — per-byte signed `max(a, b)` via `SSUB8` + `SEL`
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -88,6 +92,36 @@ loop:
 2. `sel r3, r0, r1` — for each lane, GE=1 → take from `r0` (the larger byte), GE=0 → take from `r1`. The result is the lane-wise signed maximum.
 
 That `SADD8`/`SSUB8` (or unsigned variants) → `SEL` is **the** GE-flag pattern. Min, max, clamp, conditional blend — they all collapse to two instructions.
+
+### Example 2 — per-byte unsigned `min(a, b)` via `USUB8` + `SEL`
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Per-byte unsigned min(a, b): USUB8 sets APSR.GE<i> = 1 when the
+    @ unsigned subtract a[i] - b[i] did NOT borrow, i.e. when a[i] >= b[i].
+    @ So to keep the smaller byte we tell SEL "if GE=1 take b, else take a".
+    ldr     r0, =0x10203040     @ a: bytes 0x40, 0x30, 0x20, 0x10
+    ldr     r1, =0x05FF1050     @ b: bytes 0x50, 0x10, 0xFF, 0x05
+    usub8   r2, r0, r1          @ updates APSR.GE<3:0>; r2 itself is discarded
+    sel     r3, r1, r0          @ per-lane: GE=1 -> b (the smaller), GE=0 -> a
+    @ Lane 0: a=0x40 vs b=0x50 -> a<b -> GE0=0 -> pick a=0x40
+    @ Lane 1: a=0x30 vs b=0x10 -> a>=b -> GE1=1 -> pick b=0x10
+    @ Lane 2: a=0x20 vs b=0xFF -> a<b -> GE2=0 -> pick a=0x20
+    @ Lane 3: a=0x10 vs b=0x05 -> a>=b -> GE3=1 -> pick b=0x05
+    @ r3 = 0x05201040 — the per-lane unsigned min
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `usub8 r2, r0, r1` — does four parallel unsigned subtracts. The numerical result in `r2` doesn't matter; we only care about the side effect: `APSR.GE<i>` is `1` precisely when `a[i] >= b[i]`.
+2. `sel r3, r1, r0` — for each lane GE=1 picks `b` (the smaller byte when `a >= b`), GE=0 picks `a`. Swap the operand order vs. the max example and the same two-instruction skeleton flips between min and max.
 
 ## See also
 

@@ -14,6 +14,9 @@
 VRINTZ{<cond>}.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you need the truncated value of a float kept as a float — `truncf(x)` in one instruction with the result still in an S register. The classic use is the **signed fractional part**: `frac = x - VRINTZ(x)` is in `(-1, 1)` and has the *same sign as x* (unlike the [VRINTM](VRINTM.md) version, which is always non-negative). Typical context: phase wrap-around in a numerically-controlled oscillator (NCO), polynomial argument reduction, and anywhere C's `(int)x` semantics are wanted but a float is needed downstream. Without it you'd round-trip through int.
+
+
 The `truncf` of the FPU. Unlike the `VCVTA/N/P/M` family, `VRINTZ` (and `VRINTR`,
 `VRINTX`) **do** allow an IT-block condition.
 
@@ -55,6 +58,9 @@ Independent of `FPSCR.RMode`.
 
 ## Example
 
+
+### Example 1 — truncf() — drop the fractional part, keep the sign
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -85,6 +91,29 @@ loop:
 3. `vrintz.f32 s5,s4` — −0.7 truncates to −0.0 — note the negative zero.
 
 Pick `VRINTZ` when you want C-style `(int)x` semantics but need a float result.
+
+### Example 2 — signed fractional part: frac = x - truncf(x)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  frac_signed
+    .thumb_func
+frac_signed:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ s0 = input float; return signed fract in (-1, 1) with same sign as input
+    vrintz.f32 s1, s0             @ s1 = truncf(s0)
+    vsub.f32   s0, s0, s1         @ s0 = s0 - truncf(s0)
+    bx         lr
+```
+
+**Walkthrough:**
+
+1. `vrintz.f32 s1,s0` truncates toward zero — for `s0 = -2.25`, `s1 = -2.0`.
+2. `vsub.f32 s0,s0,s1` yields `-0.25` — a *signed* fractional part with the same sign as the input. Compare with the [VRINTM](VRINTM.md) version which always returns a non-negative fract.
+3. NCO phase wrap-around and polynomial argument reduction usually want this signed form.
 
 ## See also
 

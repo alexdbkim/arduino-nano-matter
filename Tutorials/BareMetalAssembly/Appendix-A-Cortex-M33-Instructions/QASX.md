@@ -14,6 +14,8 @@
 QASX <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `QASX` is the cross-lane swap-and-sat that complex DSP lives on. Lane layout in plain English: **top half of the result = top half of `Rn` PLUS bottom half of `Rm`; bottom half of the result = bottom half of `Rn` MINUS top half of `Rm`**. That's exactly the shuffle a complex multiply needs (real on top, imag on bottom), one half of every FFT butterfly, the rotation step of a Hilbert transform, and the in-place rotate of a 2D vector when combined with a multiply. Without `QASX` you'd need at least three or four instructions (`PKHBT`/`PKHTB` + scalar add + scalar sub + saturate) — `qasx` does the whole exchange-add/subtract-saturate in one cycle.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-halfword signed cross add/subtract
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,34 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `qasx r0, r1, r2` exchanges the halves of `r2` first, then computes `r0[hi] = r1[hi] + r2[lo]` and `r0[lo] = r1[lo] − r2[hi]`.
 3. Each half is then **saturated** to the signed 16-bit range `[−32768, 32767]`.
+
+### Example 2 — complex multiply real-part cross step
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Building block of (a+jb)*(c+jd) where Rn = a:b (hi:lo, signed 16-bit)
+    @ and Rm = c:d. The "real part" cross combines a*c on top with -b*d on
+    @ bottom; the qasx primitive captures the +/- crossover pattern after the
+    @ multiplies have been done lane-wise.
+    movw    r0, #0x0064         @ b =  +100
+    movt    r0, #0x012C         @ a =  +300
+    movw    r1, #0x0032         @ d =  +50
+    movt    r1, #0x00C8         @ c =  +200
+    qasx    r2, r0, r1          @ hi = sat(a + d), lo = sat(b - c)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` packs `a` (high half) and `b` (low half); `r1` packs `c` (high) and `d` (low).
+2. `qasx` produces `r2_hi = sat(a + d) = sat(300+50) = +350` and `r2_lo = sat(b − c) = sat(100−200) = −100`, all in one cycle and each lane independently clamped to `[−32768, +32767]`.
+3. This is the exact lane shuffle a complex-arithmetic cross-term step needs; without `qasx` it takes a `PKHBT`/`PKHTB` rearrangement plus separate add and subtract with manual saturation — at least 3–4 cycles versus 1.
 
 ## See also
 

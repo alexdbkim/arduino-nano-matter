@@ -14,6 +14,8 @@
 TBB   [<Rn>, <Rm>]
 ```
 
+**When you'd actually use this**: `TBB` is what compilers emit for a dense `switch` statement with small case bodies — every entry is one byte, so a 16-case table is 16 bytes, vs ~64 bytes for a `LDR PC, [PC, Rn, LSL #2]`-style word table. Without `TBB`, a 16-case switch would either compile to a chain of `CMP`+`Bcc` (many cycles per branch and big code size) or to a 64-byte word table with one extra load. Two things bite: it does no bounds check (you must `CMP`+`BHI` first), and the forward-only / 510-byte reach means tables with large case bodies have to graduate to `TBH`. Always `.align 1` after the table so the case bodies stay halfword-aligned — `TBB` multiplies the byte by 2.
+
 `TBB` implements a switch/case jump table compactly. It reads one byte from `(<Rn> + <Rm>)`, multiplies that byte by 2, and adds the result to the PC to form the new PC. The branch is therefore **forward-only** and has a maximum reach of `255 × 2 = 510` bytes from the table.
 
 The byte you store in the table is `(target − table_base) / 2`. The assembler computes that for you with the `(target - table_base)/2` expression, but most tools provide the `.byte (target - table_base)/2` idiom directly.
@@ -54,6 +56,8 @@ PC     = PC + (offset << 1)
 - `UsageFault (INVSTATE)` if the computed PC ever lands on a non-Thumb address — impossible with assembler-generated tables, but possible if you hand-craft a malformed `.byte` value.
 
 ## Example
+
+### Example 1 — 4-way switch with .byte offsets
 
 ```asm
     .syntax unified
@@ -102,6 +106,48 @@ loop:
 5. `.align 1` — keeps the case bodies halfword-aligned, which matters because `TBB` multiplies the table byte by 2.
 
 The total table is 4 bytes long instead of 16 bytes for an `LDR PC, [PC, Rn, LSL #2]`-style jump table. That's the whole point.
+
+### Example 2 — 3-way switch on r0
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #1          @ pick case 1
+    cmp     r0, #2
+    bhi     .Ldefault       @ bounds-check (TBB doesn't)
+    tbb     [pc, r0]
+.Ltable:
+    .byte   (.Lc0 - .Ltable) / 2
+    .byte   (.Lc1 - .Ltable) / 2
+    .byte   (.Lc2 - .Ltable) / 2
+    .align  1
+.Lc0:
+    movs    r1, #100
+    b       .Ldone
+.Lc1:
+    movs    r1, #200
+    b       .Ldone
+.Lc2:
+    movs    r1, #300
+    b       .Ldone
+.Ldefault:
+    movs    r1, #0
+.Ldone:
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `bhi .Ldefault` — bounds-check on the unsigned index; everything above 2 falls through to the default arm.
+2. `tbb [pc, r0]` — fetch byte at `&.Ltable + r0`, double it, add to PC.
+3. `.byte (.Lc1 - .Ltable) / 2` — entry 1's value is the halfword distance from the table base to `.Lc1`. The runtime `<<1` reverses the `/2`.
+4. `.align 1` — re-aligns to a halfword boundary after a 3-byte table so the case-body instructions are properly aligned for Thumb.
+5. `movs r1, #200` — case 1 runs and lands at the join `.Ldone`.
 
 ## See also
 

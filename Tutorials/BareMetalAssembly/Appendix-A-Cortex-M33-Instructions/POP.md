@@ -16,6 +16,8 @@ POP{<cond>}  <reglist>
 
 Alias for `LDMIA SP!, <reglist>`. Mirror of [`PUSH`](PUSH.md): registers come back from the lowest-numbered to highest, with PC permitted as a list member to perform a function return in one go.
 
+**When you'd actually use this.** `POP` appears at the bottom of essentially every non-leaf C function on Cortex-M33: the compiler emits `pop {r4-r7, pc}` to restore the callee-saved registers it spilled in the prologue and return all in one instruction. RTOS context switches and PendSV/SVC exit paths use the wider 32-bit form `pop.w {r4-r11, pc}` to resume a task. The trick that beats two-instruction returns: popping straight into PC fuses the load-and-branch — without it you'd `pop {lr}` then `bx lr`, paying an extra cycle and an extra register-list slot. Because Thumb encodes bit 0 of the saved LR, the interworking branch "just works" and stays in Thumb state.
+
 ## Operands
 
 | Field       | Type           | Constraints                                                 |
@@ -59,6 +61,8 @@ SP = SP + 4*BitCount(reglist);
 
 ## Example
 
+### Example 1 — function epilogue with single-register pop
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -82,6 +86,30 @@ loop:
 1. `push {r4, r5, lr}` — sets up the frame. (Stand-in prologue.)
 2. `pop {r0}` — single-register pop, equivalent to `ldr r0, [sp], #4`. Useful for ad-hoc unwinding.
 3. `pop {r4, r5, pc}` — restores R4 and R5, then loads PC from the saved LR slot. Because LR was pushed with bit 0 = 1 (Thumb), the interworking branch returns cleanly. This is the part that bites people: if you `push {lr}` but `pop {lr}` and then `bx lr` separately, you wasted a cycle; popping straight into PC fuses the return.
+
+### Example 2 — RTOS task resume restoring high callee-saved bank
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ POP demo 2: simulate an RTOS task resume (restore r4-r11 + return).
+    push.w  {r4-r11, lr}            @ pretend prologue / saved task frame
+    movs    r4, #0
+    movs    r5, #0xFF
+    @ ... task body would run here ...
+    pop.w   {r4-r11, pc}            @ restore non-volatile regs and return in one go
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `push.w {r4-r11, lr}` — pushes the high callee-saved bank plus LR; the 32-bit (`.W`) encoding is required because R8–R11 aren't in the 16-bit PUSH/POP register set.
+2. `pop.w {r4-r11, pc}` — restores all eight callee-saved registers *and* loads PC from the saved-LR slot in one instruction. On a real RTOS this is the resume of a previously suspended task; on a normal function it's the epilogue. No separate `bx lr` needed.
 
 ## See also
 

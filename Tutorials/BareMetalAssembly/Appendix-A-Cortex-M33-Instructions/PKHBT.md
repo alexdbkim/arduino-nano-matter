@@ -14,6 +14,8 @@
 PKHBT  <Rd>, <Rn>, <Rm>{, LSL #<imm>}
 ```
 
+**When you'd actually use this** is the one-instruction "build a packed `[c1|c0]` halfword pair from two scalar registers". It's what you reach for just before feeding a Q15 sample/coefficient pair into `SMLAD`, `SMUAD`, or any other dual-16-bit DSP op that consumes a packed word. Without it you'd need a `LSL` + `ORR` (or `BFI`) sequence that chews an extra register and a cycle. Treat `PKHBT` as "the SIMD packer" the moment two halfwords are scattered across separate registers.
+
 Glues two 16-bit halfwords from two registers into one 32-bit word. The **B**ottom half comes from `Rn`, the **T**op half comes from `Rm` (after an optional left shift of 0–31).
 
 ## Operands
@@ -58,6 +60,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — stereo audio sample assembly
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -82,6 +86,32 @@ loop:
 2. `pkhbt r4, r0, r3` — same idea but `r3` already has the wanted halfword in bits [31:16], so no shift is needed. `r4 = 0x1234_AAAA`.
 
 The mental model: `Rn` always contributes the **bottom** half as-is; `Rm` (post-shift) always contributes its **top** half.
+
+### Example 2 — building a packed Q15 coefficient pair `[c1|c0]`
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Build a packed Q15 coefficient pair [c1 | c0] ready for SMLAD
+    ldr     r0, =0x00002000     @ c0 = 0x2000  (Q15 ≈ 0.25), in low half of r0
+    ldr     r1, =0x00006000     @ c1 = 0x6000  (Q15 ≈ 0.75), in low half of r1
+    pkhbt   r2, r0, r1, lsl #16 @ r2 = 0x6000_2000 = [c1 | c0]
+    @ r2 is now a packed coefficient pair; feed it to SMLAD against
+    @ a sample pair packed [s1|s0] and one instruction does
+    @ acc += s0*c0 + s1*c1.
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `c0` lives in the low half of `r0`; `c1` lives in the low half of `r1`. Each was produced earlier (e.g. by a Q15 quantiser or table lookup).
+2. `pkhbt r2, r0, r1, lsl #16` — keeps `r0`'s bottom half (`0x2000`) as the result's bottom half, then shifts `r1` left 16 so `0x6000` sits in its top half, and grafts that on top. Result: `r2 = 0x6000_2000`.
+3. `r2` is now in the exact packed-halfword layout `SMLAD`/`SMUAD` expect — no extra `LSL`+`ORR` or scratch register required.
 
 ## See also
 

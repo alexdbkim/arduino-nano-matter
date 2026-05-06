@@ -14,6 +14,8 @@
 SMMLAR <Rd>, <Rn>, <Rm>, <Ra>
 ```
 
+**When you'd actually use this:** SMMLAR is SMMLA with the **round-half-up** constant baked in — `Rd = Ra + ((Rn × Rm + 0x80000000) >> 32)`. Use it when you're MAC'ing a long Q31 chain — a 64-tap Q31 FIR, a cascade of 4–8 Q31 biquad sections, an LMS adaptive filter that runs for hours — and the per-multiply truncation bias of plain SMMLA would slowly walk your output away from zero. Without SMMLAR you'd need to bias each product by hand: `SMULL`, add `0x80000000` to the 64-bit pair with `ADDS/ADC`, then add the high half to the accumulator — four instructions per tap instead of one. In an audio biquad running at 48 kHz with 5 sections in cascade, that's the difference between an inaudible filter and one with a measurable DC offset.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — rounded Q31 multiply-accumulate
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -75,6 +79,39 @@ loop:
 
 1. Identical to `SMMLA` but rounds the 64-bit product before truncating.
 2. Use this in long Q31 cascades to avoid systematic downward bias.
+
+### Example 2 — feed-forward step of a Q31 biquad (b0·x0 + b1·x1 + b2·x2)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Direct Form I biquad numerator: y = b0*x[n] + b1*x[n-1] + b2*x[n-2]
+    @ All values Q31. Use SMMLAR so a 5-section cascade doesn't drift.
+    ldr     r1, =0x40000000     @ b0
+    ldr     r2, =0x20000000     @ x[n]
+    ldr     r3, =0x60000000     @ b1
+    ldr     r4, =0x10000000     @ x[n-1]
+    ldr     r5, =0x40000000     @ b2
+    ldr     r6, =0x08000000     @ x[n-2]
+
+    movs    r0, #0              @ Q31 accumulator
+    smmlar  r0, r1, r2, r0      @ acc += round(b0 * x[n])
+    smmlar  r0, r3, r4, r0      @ acc += round(b1 * x[n-1])
+    smmlar  r0, r5, r6, r0      @ acc += round(b2 * x[n-2])
+    @ feedback (a1, a2) would be subtracted next with SMMLSR
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. Three rounded MACs realize the numerator of one biquad section. Each tap rounds independently — that prevents the −0.5 LSB truncation bias from compounding across the cascade.
+2. The feedback `−a1·y[n−1] − a2·y[n−2]` slots in next using `SMMLSR` (rounded multiply-subtract).
+3. Cost: 3 instructions + 0 scratch registers per numerator. The `SMULL`-based equivalent is ~12 instructions and a 64-bit accumulator pair.
 
 ## See also
 

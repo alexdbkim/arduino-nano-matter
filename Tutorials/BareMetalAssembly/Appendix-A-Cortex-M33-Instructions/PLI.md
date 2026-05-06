@@ -16,6 +16,8 @@ PLI  [<Rn>, <Rm>{, LSL #<shift>}]
 PLI  <label>                   @ PC-relative literal form
 ```
 
+**When you'd actually use this** is for telling the I-cache you're about to execute a cold function — typical pattern is `PLI [r0]` followed shortly by `BLX r0` so the line is warm by the time the call lands. On bigger Cortex cores with a real I-cache (M7, A-class) it measurably hides miss latency on indirect calls and far branches. On the Cortex-M33 in the EFR32MG24 there's no programmer-visible I-cache (the chip's flash prefetcher handles things), so `PLI` decodes as a NOP — keep it in portable code, drop it if you're targeting M33-only and want a smaller image, since each `PLI` is still a 4-byte instruction.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -59,6 +61,8 @@ No 16-bit form.
 
 ## Example
 
+### Example 1 — Hint a cold call target
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -88,6 +92,34 @@ cold_path:
 2. `blx r0` — the actual indirect call. On the Nano Matter the flash prefetcher handles this transparently anyway.
 
 `PLI` is essentially documentation on this chip. Keep it in code that's also targeted at Cortex-A or M7; drop it if the codebase is M33-only and you want minimum image size — every `PLI` is a 4-byte NOP.
+
+### Example 2 — Prefetch a jump-table function before BLX
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    ldr     r0, =cold_target
+    pli     [r0]                @ "we're about to execute here"
+    pli     [r0, #32]           @ next line ahead too
+    blx     r0                  @ actual indirect call
+loop:
+    b   loop
+
+    .thumb_func
+cold_target:
+    movs    r0, #42
+    bx      lr
+```
+
+**Walkthrough:**
+
+1. `pli [r0]` and `pli [r0, #32]` — two hints covering the start of `cold_target`. On M33 both decode as NOPs; on M7 they overlap with the call's branch latency.
+2. `blx r0` — the actual indirect call. By the time it lands, a real I-cache would have the lines warm.
+3. Drop the `pli` lines if image size matters and the build is M33-only — they save zero cycles on this chip and cost 4 bytes each.
 
 ## See also
 

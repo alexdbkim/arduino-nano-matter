@@ -21,6 +21,8 @@ LDR{<cond>}  <Rt>, =<expr>                     @ assembler literal-pool pseudo
 
 `LDR` is the workhorse 32-bit load. Variants for narrower types: [`LDRB`](LDRB.md), [`LDRH`](LDRH.md), [`LDRSB`](LDRSB.md), [`LDRSH`](LDRSH.md), [`LDRD`](LDRD.md).
 
+**When you'd actually use this.** Anytime a C compiler emits a 32-bit memory access for a `uint32_t`, a pointer, or a `volatile uint32_t *MMIO` peripheral register, you'll see `LDR`. The most common forms in EFR32MG24 firmware are `ldr r1, [r0, #0x1C]` to read a status register at *base + offset* (e.g. `USART0->STATUS`), and the assembler pseudo `ldr r0, =0x40000000` to materialise a peripheral base address — without it you'd burn two instructions (`MOVW`+`MOVT`) or a shift+OR sequence, whereas the literal-pool form is one instruction and works for *any* 32-bit constant. The post-indexed form `ldr r1, [r0], #4` is the inner loop of every word-aligned `memcpy`. Loading the PC produces an interworking branch — that's how function tail-calls through tables and `bx`-free dispatch work.
+
 ## Operands
 
 | Field   | Type                 | Constraints                                                                         |
@@ -75,6 +77,8 @@ Loads never touch flags.
 
 ## Example
 
+### Example 1 — every common addressing mode with a literal pool
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -107,6 +111,33 @@ my_const:
 4. `ldr r5, [r0, #8]!` — *pre-indexed*: base updates **before** the load. Equivalent to `r0 += 8; r5 = *r0;`.
 5. `ldr r6, [r0], #4` — *post-indexed*: load first, then bump. Idiomatic for streaming reads.
 6. `ldr r7, my_const` — PC-relative literal pool. The label must be word-aligned and within ±4 KB.
+
+### Example 2 — polling a peripheral status register (MMIO)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ LDR demo 2: poll a peripheral status register at base+offset.
+    ldr     r0, =0x40010000         @ pretend USART base
+poll:
+    ldr     r1, [r0, #0x1C]         @ read STATUS register (offset 0x1C)
+    tst     r1, #(1 << 7)           @ test TX-buffer-empty flag
+    beq     poll                    @ spin until ready
+    ldr     r2, [r0, #0x00]         @ snapshot CTRL register using same base
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `ldr r0, =0x40010000` — assembler pseudo: materialises the peripheral base address, typically as `MOVW`+`MOVT` (or a literal-pool fetch on encodings where that's smaller).
+2. `ldr r1, [r0, #0x1C]` — single MMIO read of the STATUS register; `[Rn, #imm]` with a constant offset is the canonical pattern for register accesses inside a peripheral block.
+3. `tst` + `beq poll` — busy-wait for the flag bit; doesn't change R1.
+4. `ldr r2, [r0, #0x00]` — read CTRL using the *same* base register — exactly why you spend one instruction loading the base and then reuse it for every register in the block.
 
 ## See also
 

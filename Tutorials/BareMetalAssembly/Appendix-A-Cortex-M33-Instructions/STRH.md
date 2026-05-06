@@ -19,6 +19,8 @@ STRH{<cond>}  <Rt>, [<Rn>], #<imm>
 
 Stores `R[t]<15:0>`. Address must be half-word aligned.
 
+**When you'd actually use this**: writing 16-bit values — feeding samples to a 12/16-bit DAC, populating an ADC results buffer of `uint16_t`, writing a half-word peripheral register (some timer compare/capture registers are 16 bits wide), or storing a `uint16_t` struct field. The address must be even (bit 0 = 0); odd addresses fault when `CCR.UNALIGN_TRP` is set, and they always fault on Device memory. Without `STRH` you'd write two separate `STRB`s in increasing-address order, which on a little-endian Cortex-M produces the same bytes but is twice as many instructions and breaks any peripheral that latches on the half-word write.
+
 ## Operands
 
 | Field   | Type            | Constraints                                              |
@@ -61,6 +63,8 @@ if wback then R[n] = offset_addr;
 
 ## Example
 
+### Example 1 — Indexed writes into a uint16_t buffer
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -91,6 +95,31 @@ dac_buffer:
 1. `strh r1, [r0]` — writes the low 16 bits of R1 (0x1234). The upper 16 bits of R1 are ignored.
 2. `strh r2, [r0, r3, lsl #1]` — typical `uint16_t[]` indexed write: `lsl #1` scales the index by 2.
 3. `strh r2, [r0], #2` — post-indexed streaming write, the C-equivalent of `*p++ = v;` for a `uint16_t *p`.
+
+### Example 2 — Set a 16-bit timer compare register
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Program a 16-bit TIMER->CC0 compare register for ~50% duty.
+    ldr     r0, =0x40048000     @ TIMER base
+    movw    r1, #0x7FFF         @ duty = 32767
+    strh    r1, [r0, #0x40]     @ TIMER->CC0 = 0x7FFF
+    movw    r1, #0xFFFF         @ TOP = 65535
+    strh    r1, [r0, #0x3C]     @ TIMER->TOP = 0xFFFF
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `movw` builds a 16-bit immediate in one instruction; that's the natural pair for `STRH` since only the low 16 bits are stored.
+2. The base+immediate form `[r0, #0x40]` matches how a CMSIS `TIMER->CC0 = value;` compiles for a half-word-wide register.
+3. Both offsets (`0x3C`, `0x40`) are half-word aligned — required, otherwise the access faults on Device memory regardless of `UNALIGN_TRP`.
 
 ## See also
 

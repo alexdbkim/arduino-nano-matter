@@ -17,6 +17,8 @@ ORN{S}{<cond>} {<Rd>,} <Rn>, #<const>
 
 `Rd = Rn OR (NOT operand2)`. The OR-side cousin of `BIC`.
 
+**When you'd actually use this** is **"set everything except these bits"** — `orn r0, r0, #MASK` raises every bit *not* in `MASK` while leaving the masked bits alone. It's also handy when the constant you really want is `~K` and `K` fits as a Thumb-2 modified immediate but `~K` doesn't — `ORN #K` saves you from loading `~K` from a literal pool. In hand-written code it's much rarer than `ORR`/`BIC`, but it occasionally simplifies bit-pattern construction in one instruction where the alternative would be two.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -66,6 +68,8 @@ if ConditionPassed() then
 
 ## Example
 
+### Example 1 — set the high byte to ones
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -89,6 +93,24 @@ loop:
 1. `mov r1, #0x00FFFFFF` — load a mask whose bits we want to **leave alone** (well, leave-as-`Rn`). `~r1` is `0xFF000000`.
 2. `orn r2, r0, r1` — sets exactly those high 8 bits in `r0`. Result: `0xFFABCDEF`.
 3. The real win: when the *inverted* form of an immediate is encodable as a Thumb-2 modified immediate but the direct form isn't, `ORN #x` succeeds where `ORR #~x` would have to spill to a literal pool.
+
+### Example 2 — force all bits except the low byte
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Set every bit in r0 *except* the low byte (which keeps its existing value).
+    ldr     r0, =0x00000042        @ low byte 0x42, rest zero
+    orn     r0, r0, #0xFF          @ r0 = r0 | ~0xFF = r0 | 0xFFFFFF00 = 0xFFFFFF42
+loop:
+    b   loop
+```
+
+**Walkthrough:** `ORN #0xFF` ORs `r0` with `0xFFFFFF00` — keeping the low byte untouched and forcing the upper 24 bits high. Doing the same with `ORR` would need `orr r0, r0, #0xFFFFFF00`, but `0xFFFFFF00` isn't a Thumb-2 modified immediate, so the assembler would have to emit a literal-pool load. `ORN` keeps it as one 32-bit instruction.
 
 ## See also
 

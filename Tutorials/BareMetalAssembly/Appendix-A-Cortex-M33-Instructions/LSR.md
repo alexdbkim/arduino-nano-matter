@@ -17,6 +17,8 @@ LSR{S}{<cond>} {<Rd>,} <Rn>, <Rs>             @ register form
 
 Shift right, **zero-fill** on the left. The last bit shifted out (bit 0 → C-out) goes into C with `S`.
 
+**When you'd actually use this** is **unsigned division by a power of two** and **extracting bit-fields**. `lsr r0, r0, #N` is `r0 / 2^N` for unsigned values — vastly cheaper than `UDIV`. To pull a packed field out of a register, `LSR` drops the bits below it and a follow-up `AND` drops the bits above (or use `UBFX` if you prefer a one-shot). For signed values reach for `ASR` instead — `LSR` zero-fills the sign bit and turns negatives into huge positives.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -65,6 +67,8 @@ For the register form, `Rs<7:0> == 0` leaves C unchanged. `Rs >= 32` zeroes the 
 
 ## Example
 
+### Example 1 — extract the high byte
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -89,6 +93,25 @@ loop:
 3. `lsrs r4, r0, #1` — sets C to the bit that fell off the right end. Pair with `ADC`/`ADCS` for unsigned multi-precision divides by two.
 
 This is the part that bites people: `LSR` is the **unsigned** divide; if you shift a negative number with `LSR` you get a huge positive number. Use [`ASR`](ASR.md) for signed divide-by-two.
+
+### Example 2 — extract a 4-bit field at bits [11:8]
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Decode the 4-bit field at bits [11:8] of a packed config word.
+    ldr     r0, =0x12345A78        @ field [11:8] = 0xA
+    lsr     r1, r0, #8             @ r1 = 0x0012345A
+    and     r1, r1, #0xF           @ r1 = 0xA
+loop:
+    b   loop
+```
+
+**Walkthrough:** `LSR` drops the bits below the field and `AND` masks off the bits above. `UBFX r1, r0, #8, #4` does the same thing in one instruction on cores that support it, but the `LSR`+`AND` idiom is universal and just as fast on modern Cortex-M33 pipelines.
 
 ## See also
 

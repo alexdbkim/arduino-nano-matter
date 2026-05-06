@@ -16,6 +16,8 @@ UXTH{<cond>} <Rd>, <Rm>{, ROR #<rotation>}
 
 Optionally rotates `<Rm>` right by 0/8/16/24 bits, takes the bottom 16 bits of the rotated value, and zero-extends to 32 bits in `<Rd>`.
 
+**When you'd actually use this** — clipping a register down to its low (or, with `ROR #16`, high) halfword as an unsigned `uint16_t`: splitting a 32-bit word into two unsigned 16-bit halves, masking out the high half before writing to a 16-bit peripheral register, or pulling individual unsigned 16-bit ADC samples out of a packed pair. `UXTH` is the one-instruction stand-in for `AND r1, r0, #0xFFFF` (which usually needs a literal-pool load) and for `LSR + AND` chains when you want the upper halfword.
+
 ## Operands
 
 | Field        | Type        | Constraints                                                |
@@ -53,6 +55,8 @@ Never updates flags.
 
 ## Example
 
+### Example 1 — split a 32-bit word into two unsigned halfwords
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -79,6 +83,29 @@ loop:
 1. `uxth r1, r0` — keeps `r0[15:0]` and zeroes the top half. Faster and shorter than `LDR` + mask.
 2. `uxth r2, r0, ROR #16` — rotates first so the upper halfword lands in the lower 16 bits, then zero-extends. One instruction, no `LSR #16` needed.
 3. The same idiom decodes packed-halfword data from peripherals like SAR-ADCs that pair samples to halve memory bandwidth.
+
+### Example 2 — mask down to a `uint16_t` before a 16-bit peripheral write
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ A peripheral data register is 16 bits wide. Our value in r0 may
+    @ have junk in its top half from previous arithmetic; UXTH gives
+    @ us a clean uint16_t in one instruction (no 0xFFFF literal).
+    ldr     r0, =0xDEADBEEF      @ junky 32-bit value
+    uxth    r1, r0               @ r1 = 0x0000BEEF, ready for "strh r1, [rPeriph]"
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `ldr r0, =0xDEADBEEF` — pretend `r0` came out of arithmetic that left `0xDEAD` in the high half.
+2. `uxth r1, r0` — keeps `r0[15:0]` and zeroes the rest, giving `0x0000BEEF`. Now `r1` is exactly what a 16-bit peripheral expects, and a `STRH` would store the right bytes regardless of what was in the upper half. The alternative `AND r1, r0, #0xFFFF` would have to materialise the 0xFFFF mask via a literal pool on Thumb-2 — strictly worse.
 
 ## See also
 

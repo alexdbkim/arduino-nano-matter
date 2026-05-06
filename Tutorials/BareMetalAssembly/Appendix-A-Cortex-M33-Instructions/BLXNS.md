@@ -18,6 +18,8 @@ BLXNS  <Rm>
 
 `Rm` holds the call target. Bit[0] of `Rm` selects the destination security state: **0 = Non-secure** (the normal case), 1 = stay Secure (acts like `BLX`).
 
+**When you'd actually use this:** `BLXNS` is for Secure code that needs to **call out** to Non-secure code and resume Secure execution afterwards. The textbook Arduino Nano Matter case is the Silicon Labs Secure Library invoking a Non-secure-supplied callback — for example, an event hook the Matter stack registered with secure boot or with the attestation service. The architecture stashes the Secure return address in a hardware-managed frame on the Secure stack and replaces `LR` with the non-dereferenceable `FNC_RETURN` token, so the Non-secure side cannot *forge* a return into the middle of a secure routine. Without `BLXNS` you'd either fault outright or, more dangerously, run Non-secure code with Secure privileges — exactly the sort of bug that turns a callback API into a complete TrustZone bypass.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -66,6 +68,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — Secure code invoking a Non-secure callback
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -97,6 +101,37 @@ loop:
 5. `bx lr` — plain return to whoever called us inside Secure code.
 
 This is the part that bites people: callers must validate the function pointer first (with [TT](TT.md) / [TTA](TTA.md)) — otherwise Non-secure code can hand Secure code a pointer into Secure memory, and although the SAU will catch it, you have wasted cycles on what should have been an early reject.
+
+### Example 2 — Validate an NS callback with TTA before invoking it
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Illustrative — full use requires a CMSE-enabled toolchain build.
+    @ BLXNS demo 2: vet a Non-secure callback pointer, then call it.
+    @ r0 = candidate callback (handed to us across the boundary).
+    bic     r1, r0, #1          @ probe address with the T-bit cleared
+    tta     r2, r1              @ Non-secure-view attribution
+    lsrs    r3, r2, #22
+    ands    r3, r3, #1          @ bit 22: address is Non-secure
+    beq     .Lbad
+    lsrs    r3, r2, #21
+    ands    r3, r3, #1          @ bit 21: NSC (must be 0 for a plain NS callback)
+    bne     .Lbad
+    bic     r0, r0, #1          @ ensure bit[0]=0 -> BLXNS transitions to NS
+    blxns   r0                  @ call NS callback; resume in Secure here
+    b       loop
+.Lbad:
+    movs    r0, #0
+loop:
+    b       loop
+```
+
+**Walkthrough:** Before letting the Non-secure side influence Secure control flow, we use `TTA` (the alternate-domain query) to look up *the Non-secure view* of the candidate address. We require the NS bit set and the NSC bit clear — i.e. the pointer must aim at plain Non-secure code, not at one of our own NSC veneers (which an attacker could otherwise abuse to ricochet back into a half-entered secure routine). Only then do we `BLXNS`. The hardware pushes the Secure return frame, scrubs caller-saved registers so we don't leak Secure data into the callback's `r0`–`r3`, and switches to Non-secure state. When the callback eventually executes `BX LR`, the magic `FNC_RETURN` value pops our Secure frame and resumes here.
 
 ## See also
 

@@ -14,6 +14,8 @@
 MOVW  <Rd>, #<imm16>
 ```
 
+**When you'd actually use this** is the first half of a `MOVW`/`MOVT` pair to materialise an arbitrary 32-bit constant in two instructions, no literal pool needed. Hand-written boot code uses it for peripheral base addresses, vector-table pointers, and other absolute MMIO targets. Compilers on M-profile prefer it over `LDR Rd, =const` whenever the constant is known at link time, because it avoids the indirect memory load and the literal-pool word — the result is faster and produces a smaller, more predictable instruction stream.
+
 Writes `imm16` to bits [15:0] of `<Rd>` and **zero-extends** bits [31:16]. Pair with [`MOVT`](MOVT.md) to load any 32-bit constant in two instructions.
 
 ## Operands
@@ -54,6 +56,8 @@ Never updates flags (no `S` form).
 
 ## Example
 
+### Example 1 — Build an MMIO address with MOVW/MOVT
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,30 @@ loop:
 2. `movt r0, #0x5003` — overwrites *only* the top half, producing 0x5003A000.
 3. `movw r1, #0xFFFF` — note R1 ends as 0x0000FFFF, **not** 0xFFFFFFFF; this is the part that bites people.
 4. `mov r2, #0x1234` — the unified syntax lets you write `mov` and the assembler picks `MOVW` when the constant won't fit a modified immediate.
+
+### Example 2 — Set up a SysTick CTRL pointer
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movw    r0, #0xE010         @ low half of SysTick CTRL (0xE000E010)
+    movt    r0, #0xE000         @ high half -> r0 = 0xE000E010
+    movs    r1, #0x07           @ ENABLE | TICKINT | CLKSOURCE
+    str     r1, [r0]            @ start SysTick
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `movw r0, #0xE010` — bottom half of the SysTick CTRL register address.
+2. `movt r0, #0xE000` — completes the address; `r0 = 0xE000E010`.
+3. `str r1, [r0]` — kicks SysTick into running with interrupts at the processor clock.
+4. The same two-instruction recipe scales to any 32-bit absolute MMIO address — perfect for early start-up code where literal pools haven't been laid out yet.
 
 ## See also
 

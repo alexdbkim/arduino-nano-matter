@@ -17,6 +17,8 @@ CMP{<cond>} <Rn>, #<const>
 
 `CMP Rn, op2` is `SUBS` with the result thrown away. It sets N, Z, C, V exactly as `SUBS` would. Always sets flags — there is no `S` suffix because flag-setting *is* the instruction.
 
+**When you'd actually use this** is **the workhorse of every conditional**. Every C `if (a < b)`, `while (i < n)`, `switch` case test, and `for`-loop bound check compiles to a `CMP` followed by a conditional branch. It computes `Rn − operand2`, sets all four flags from the subtraction, and throws the difference away — so your data registers stay intact for the actual work after the branch. Picking the right condition mnemonic afterwards (signed `BLT` vs. unsigned `BLO`, `BHS` vs. `BGE`) is the entire art of getting comparisons right.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -78,6 +80,8 @@ Always.
 
 ## Example
 
+### Example 1 — signed vs unsigned comparison
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -106,6 +110,30 @@ loop:
 3. `cmp r0, #0xFF` — immediate form; the assembler picks T1 (8-bit imm) when it fits, otherwise T2.
 
 This is the part that bites people: `CMP` C-flag means "no borrow". So `BCS`/`BHS` is taken when **`Rn >= Rm` unsigned**, which is the opposite of x86's CF after `cmp`. Easy to flip by accident.
+
+### Example 2 — counting loop
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Sum integers 1..10 in r1.
+    mov     r0, #0                 @ counter
+    mov     r1, #0                 @ accumulator
+sum_loop:
+    add     r0, r0, #1
+    add     r1, r1, r0
+    cmp     r0, #10
+    bne     sum_loop               @ keep going until r0 == 10
+    @ r1 = 55
+loop:
+    b   loop
+```
+
+**Walkthrough:** `CMP r0, #10` sets Z=1 when the counter hits the limit; `BNE` branches back while Z=0. Every C `for` loop lowers to this exact pattern — counter update, `CMP`, conditional branch.
 
 ## See also
 

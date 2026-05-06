@@ -25,6 +25,8 @@ There is no `VSELNE` / `VSELLE` / `VSELLT` — swap operands and use `VSELGE` / 
 VSEL<cc>.F32 <Sd>, <Sn>, <Sm>    @ Sd = (cc) ? Sn : Sm    cc ∈ {GE, GT, EQ, VS}
 ```
 
+**When you'd actually use this** is when you need **branchless** float selection — picking between two pre-computed values (a high-gain vs low-gain coefficient, two setpoints chosen by a mode flag, the sign-corrected operand in a custom abs) without the pipeline-flushing cost of a `Bcc`+`VMOV` pair. After a `VCMP` you must hop the FPSCR flags into APSR via `VMRS APSR_nzcv, fpscr`; only then can `VSEL` see them. Compared to a compare-and-branch, `VSEL` is one cycle, branch-predictor-friendly, and constant-time — important in safety-critical and SafeFP DSP code. The CPACR enable bites first, and bites earlier here because `VCMP` upstream is also a V-instruction; if `CP10/CP11 ≠ 0b11`, neither will run.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -64,6 +66,8 @@ APSR is *consumed*, not produced.
 
 ## Example
 
+### Example 1 — branch-free `out = (|a| >= |b|) ? a : b`
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -90,6 +94,35 @@ loop:
 2. `vcmpe.f32 s2, s3` — set FPSCR's NZCV (E variant signals on qNaN; use plain `vcmp` if you need quiet semantics).
 3. `vmrs APSR_nzcv, fpscr` — VFP comparisons land in FPSCR; you must hoist them to APSR before `VSEL`/`Bcc` can read them.
 4. `vselge.f32 s4, s0, s1` — single-cycle, branch-free pick. No flush, no mispredict.
+
+### Example 2 — pick high-gain or low-gain by error magnitude
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VSEL demo 2: choose Kp_high when |err| > threshold, else Kp_low.
+    @ S0=err, S1=threshold, S2=Kp_high, S3=Kp_low ; result u in S5
+    vabs.f32   s4, s0            @ S4 = |err|
+    vcmp.f32   s4, s1            @ FPSCR <- |err| vs threshold
+    vmrs       APSR_nzcv, fpscr  @ hoist NZCV into APSR
+    vselgt.f32 s6, s2, s3        @ S6 = (|err| > threshold) ? Kp_high : Kp_low
+    vmul.f32   s5, s6, s0        @ u = K * err   (branch-free gain schedule)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `vabs.f32` then `vcmp.f32` produce the comparison result in `FPSCR.NZCV` — no APSR flags touched yet.
+2. `vmrs APSR_nzcv, fpscr` is the mandatory bridge: `VSEL` reads APSR, not FPSCR, so without this line `VSEL` would consume stale flags from the last integer compare.
+3. `vselgt.f32 s6, s2, s3` — single-cycle branch-free gain schedule. The pipeline never speculates, so timing is constant-time regardless of which branch "wins" — handy for cryptography, motor-control jitter budgets, and SafeFP code.
+4. `vmul.f32 s5, s6, s0` — apply the chosen gain. The whole sequence has zero branches, so it's predictor-friendly inside an ISR.
 
 ## See also
 

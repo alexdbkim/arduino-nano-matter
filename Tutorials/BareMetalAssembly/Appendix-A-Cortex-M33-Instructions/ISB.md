@@ -14,6 +14,8 @@
 ISB {<option>}         @ option defaults to SY (full system); only SY is defined
 ```
 
+**When you'd actually use this** — `ISB` flushes the prefetch and forces every following instruction to be fetched fresh, so context-changing operations completed before it (writes to `CONTROL`, `VTOR`, `BASEPRI`, `PRIMASK`, MPU region setup, NVIC priority changes, FPU enable bits) are observed by subsequent instruction execution. Required after writing `SCB->VTOR` (paired with `DSB` first), after switching between MSP and PSP via `MSR CONTROL`, after enabling the MPU, and after self-modifying or freshly-loaded code — without it, already-fetched instructions can still execute under the old context. Versus `DSB` it does *not* wait for memory accesses to finish — it only re-fetches; you almost always want `DSB; ISB` together when both memory and pipeline state need to settle. Versus `DMB` it doesn't order memory at all.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -52,6 +54,8 @@ No 16-bit form.
 
 ## Example
 
+### Example 1 — switch from MSP to PSP for thread mode
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -79,6 +83,36 @@ loop:
 4. `movs r1, #42` — first "clean" instruction after the switch.
 
 This is the part that bites people: every time you write `CONTROL`, `VTOR`, `MPU_CTRL`, `CCR`, or change the FPU/security state, follow it with `ISB`. Skipping it produces bugs that only show up when the optimizer changes the prefetch window.
+
+### Example 2 — change SVCall priority via SHPR2, force refetch
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Bump SVCall priority via SHPR2, then make sure subsequent SVCs
+    @ observe the new priority — without ISB the next SVC could be
+    @ taken at the *old* priority and either escalate or be wrongly masked.
+    ldr     r0, =0xE000ED1C         @ SCB->SHPR2
+    ldr     r1, [r0]
+    bic     r1, r1, #0xFF000000
+    orr     r1, r1, #0xC0000000     @ SVCall priority byte
+    str     r1, [r0]
+    dsb
+    isb
+    @ next SVC observes the new priority
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. Read-modify-write the SVCall priority byte in `SHPR2`.
+2. `dsb` — make sure the priority write has reached the SCB.
+3. `isb` — refetch. Any `SVC` instruction that the pipeline had already speculatively fetched is discarded and re-fetched, so it executes under the new priority. Skipping the `ISB` here is a classic source of "the priority change appeared to take effect intermittently" bugs, where the optimizer's prefetch window happens to straddle the critical instruction.
 
 ## See also
 

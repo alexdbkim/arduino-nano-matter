@@ -16,6 +16,8 @@ The EFR32MG24 implements **FPv5-SP** (single precision only). The `.F64` form of
 VADD.F32 <Sd>, <Sn>, <Sm>
 ```
 
+**When you'd actually use this** is the bread and butter of any embedded control loop with non-trivial physics: accumulating the integral term in a PID (`integ += err*dt`), summing per-axis products in an acceleration-magnitude pre-norm, or running a complementary filter such as `angle = a*gyro + (1−a)*accel`. Each `VADD` performs one IEEE rounding; if you're chaining `a + b*c`, prefer `VFMA` for one combined rounding instead of two. The biggest gotcha for newcomers isn't accuracy, though — it's that without `CPACR.CP10/CP11 = 0b11` enabling the FPU, the very first `vadd.f32` raises a `NOCP` UsageFault before it computes anything.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -53,6 +55,8 @@ APSR is untouched. IEEE exceptions accumulate in `FPSCR` (read with `VMRS`).
 
 ## Example
 
+### Example 1 — sum three floats already in S0..S2
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -75,6 +79,33 @@ loop:
 1. `vadd.f32 s3, s0, s1` — first partial sum, single IEEE round.
 2. `vadd.f32 s3, s3, s2` — accumulate the third term; each `VADD` rounds independently (if you need a single rounding for `a+b*c`, use `VFMA`).
 3. `vmov r0, s3` — bit-copy the float into a core register so a debugger can inspect it.
+
+### Example 2 — one PID step (proportional + integral update)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VADD demo 2: out = Kp*err + integ ;  integ += Ki*dt*err
+    @ S0=err, S1=Kp, S2=Ki*dt, S3=integ, S4=out (result)
+    vmul.f32 s4, s1, s0      @ S4 = Kp * err
+    vadd.f32 s4, s4, s3      @ S4 = Kp*err + integ   (= controller output)
+    vmul.f32 s5, s2, s0      @ S5 = Ki*dt * err
+    vadd.f32 s3, s3, s5      @ integ += Ki*dt*err     (state update)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `vmul.f32` then `vadd.f32` form the proportional-plus-integral output — two roundings, but each term lives in a separate register so the debugger can watch them.
+2. The second `VMUL`/`VADD` pair updates the integrator state for the next tick. Because `VADD` doesn't touch APSR, you can interleave it with integer scheduling logic without disturbing condition flags.
+3. If you cared about the extra rounding, `vfma.f32 s4, s1, s0` (Sd += Sn*Sm) would replace the first two instructions with a single fused multiply-add.
 
 ## See also
 

@@ -14,6 +14,8 @@
 BLX   <Rm>
 ```
 
+**When you'd actually use this**: `BLX <Rm>` is what the compiler emits any time the call target lives in a register — function pointers, C++ vtables, RTOS task entry points, callback registries, ISR-handler tables stored in RAM. Without it you'd reproduce dispatch with a chain of `CMP`/`BEQ`/`BL` per case, which is much bigger and slower. The thing that bites: the Thumb-bit rule (`Rm[0] == 1`). Addresses you compute by hand, or copy raw out of a `.word` table that wasn't built with `.thumb_func` symbols, will fault on the first `BLX` with `UsageFault (INVSTATE)`.
+
 `BLX` is the register-indirect call. It writes the return address into `LR` (with bit 0 forced to 1 to mark Thumb) and then branches to `<Rm>`, switching instruction set according to `Rm[0]` — the same rule as `BX`. On Cortex-M33 the only legal value of `Rm[0]` is `1` (Thumb); a `0` raises `UsageFault (INVSTATE)`. There is no `BLX <label>` form on M-profile (that exists only on A/R profiles to switch into ARM state, which Cortex-M doesn't have).
 
 You'll see `BLX` whenever C calls through a function pointer: a vtable, a callback, a HAL driver dispatch table, RTOS task entry trampolines, etc.
@@ -53,6 +55,8 @@ if EPSR.T == 0 then UsageFault(INVSTATE)
 
 ## Example
 
+### Example 1 — function-pointer table dispatch
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -91,6 +95,36 @@ handler_table:
 3. `blx r2` — jumps to `square`, sets `LR` to the next instruction's address with bit 0 = 1.
 4. `muls r0, r0, r0` — the called function squares `r0`.
 5. `bx lr` — returns. If anyone had built `handler_table` with raw `&square` (no Thumb bit), `BLX` would fault here on Cortex-M33.
+
+### Example 2 — call through a single function pointer
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    ldr     r3, =triple     @ Thumb bit is set for us by .thumb_func
+    movs    r0, #4
+    blx     r3              @ call through the register
+    @ r0 == 12 here
+loop:
+    b       loop
+
+    .thumb_func
+triple:
+    adds    r1, r0, r0
+    adds    r0, r0, r1
+    bx      lr
+```
+
+**Walkthrough:**
+
+1. `ldr r3, =triple` — load the function pointer. The `=symbol` form sets bit 0 because `triple` was declared `.thumb_func`.
+2. `blx r3` — branch to the address in `r3`, save return address (with Thumb bit) in `LR`.
+3. Inside `triple`, two `adds` produce `r0 * 3`.
+4. `bx lr` — return; control resumes at the `loop` spin.
 
 ## See also
 

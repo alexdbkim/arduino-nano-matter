@@ -14,6 +14,8 @@
 UDF{.W} #<imm>         @ T1: imm 0..255   T2: imm 0..65535
 ```
 
+**When you'd actually use this** — `UDF` is *guaranteed-undefined-forever*: the encoding will never be repurposed, so it's the architecturally clean way to mark unreachable code, switch-default cases, integer-overflow traps (the back-end of `-ftrapv`), or deliberate fault-injection for firmware tests. Unlike `BKPT` it behaves identically with or without a debugger — always a UsageFault (escalating to HardFault if `SHCSR.USGFAULTENA = 0`) — which makes it the right choice for `assert(0)` in shipping firmware. The 16-bit immediate has no architectural meaning but is readable from the faulting PC, so you can use it as a numeric tag to disambiguate which `UDF` site fired.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -53,6 +55,8 @@ The T2 form is mostly used by linkers/compilers that want a 32-bit "trap" they c
 
 ## Example
 
+### Example 1 — unreachable-dispatch trap
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -82,6 +86,31 @@ loop:
 3. Unlike `BKPT`, `UDF` behaves identically with or without a debugger — making it the right choice for `assert(0)`-style traps in shipping firmware.
 
 This is the part that bites people: if you haven't enabled UsageFault (`SHCSR.USGFAULTENA = 1`), `UDF` will land you in HardFault, which has less informative status registers — enable UsageFault during bring-up so you actually see `UNDEFINSTR`.
+
+### Example 2 — switch-default trap in shipping firmware
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ switch (cmd) { case 0..2: …; default: unreachable }
+    movs    r0, #4                  @ "out of range" input
+    cmp     r0, #2
+    bls     case_ok
+    udf     #0xDE                   @ tag 0xDE in UFSR for triage
+case_ok:
+    @ valid case handler here
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `cmp` / `bls` accept inputs 0..2.
+2. Out-of-range inputs fall into `udf #0xDE`. The fault handler can read the halfword at the stacked PC, mask the low byte, and recover `0xDE` to know exactly which `UDF` fired. Versus `BKPT` here: `UDF` is the right shipping choice because it produces a UsageFault on a board *without* a debugger too — `BKPT` would HardFault with a vague status code instead.
 
 ## See also
 

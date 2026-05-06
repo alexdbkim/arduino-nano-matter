@@ -20,6 +20,8 @@ LDRSB{<cond>}  <Rt>, <label>
 
 Reads one byte and **sign-extends** bit 7 across the upper 24 bits. The natural way to load `int8_t`.
 
+**When you'd actually use this.** `LDRSB` is the right load when the source is `int8_t`: temperature deltas, audio dithering coefficients, signed packed PCM, or any small signed lookup table (a sine table compressed to 8 bits per sample, for instance). The single-instruction sign-extension means a −1 byte (0xFF) becomes 0xFFFFFFFF in the destination — exactly what subsequent arithmetic on it needs. The alternative — `LDRB` followed by `SXTB` to fix the sign — is two instructions for what `LDRSB` does in one, and it's a frequent off-by-one bug source ("why is my −1 sample appearing as +255 in my accumulator?").
+
 ## Operands
 
 | Field   | Type                 | Constraints                       |
@@ -63,6 +65,8 @@ There is **no** 16-bit immediate-offset form for `LDRSB`; immediate-offset uses 
 
 ## Example
 
+### Example 1 — signed-byte deltas with all addressing modes
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -91,6 +95,38 @@ deltas:
 2. `ldrsb r2, [r0, #1]` — `127` (0x7F). Bit 7 is 0, so R2 = 0x0000007F.
 3. `ldrsb r4, [r0, r3]` — `-128` (0x80). Bit 7 is 1, R4 = 0xFFFFFF80 (-128). This is the part that bites people: a plain `LDRB` here would yield 0x00000080 (+128).
 4. `ldrsb r5, [r0], #1` — typical streaming pattern for signed byte arrays.
+
+### Example 2 — summing a buffer of int8 deltas into a 32-bit accumulator
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ LDRSB demo 2: sum N signed bytes into an int32 accumulator.
+    ldr     r0, =deltas
+    movs    r1, #4                  @ count
+    movs    r2, #0                  @ accumulator
+sum_loop:
+    ldrsb   r3, [r0], #1            @ r3 = (int32_t)*p++  (sign-extended)
+    adds    r2, r2, r3
+    subs    r1, r1, #1
+    bne     sum_loop
+loop:
+    b       loop
+
+    .align  2
+deltas:
+    .byte   -1, 127, -128, 2
+```
+
+**Walkthrough:**
+
+1. `ldrsb r3, [r0], #1` — post-indexed signed byte load: R3 receives the sign-extended value, then R0 advances by one. Using `LDRB` here would silently turn −1 into +255 and bias the sum.
+2. `adds r2, r2, r3` — accumulate; because R3 is properly sign-extended, negative deltas subtract correctly from the running total.
+3. `subs r1, r1, #1` / `bne sum_loop` — standard counted-loop tail.
 
 ## See also
 

@@ -15,6 +15,8 @@ MOV{<cond>}   <Rd>, <Rm>            @ register form
 MOV{<cond>}   <Rd>, #<imm>          @ immediate form (modified-imm or 16-bit)
 ```
 
+**When you'd actually use this** is everywhere a compiler needs to copy a value: setting up `r0` as a return value just before `BX LR`, shuffling a live variable across a function call, or dropping a small constant into a register. Crucially, `MOV` does *not* touch the flags, so you can use it inside a chain of conditionals without disturbing earlier `cmp`/`subs` results. If you actually want flags refreshed, switch to `MOVS`; if you want an arbitrary 32-bit constant, see the `MOVW`/`MOVT` pair.
+
 `MOV` does **not** set flags. Use [`MOVS`](MOVS.md) for the flag-setting variant.
 
 ## Operands
@@ -63,6 +65,8 @@ if ConditionPassed() then
 
 ## Example
 
+### Example 1 — Constants and register copies
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +90,33 @@ loop:
 2. `mov r1, r0` — copies R0 into R1; the assembler picks the 16-bit T1 encoding.
 3. `mov.w r2, #0x00FF00FF` — uses the 32-bit modified-immediate encoding (replicated byte pattern).
 4. `movw r3, #0xBEEF` then `movt r3, #0xDEAD` — the canonical way to get an arbitrary 32-bit constant into a register without a literal pool. This is the part that bites people: a single `MOV` cannot hold any 32-bit value, only ones the modified-immediate scheme can encode.
+
+### Example 2 — Stage a return value before BX LR
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    bl      compute
+loop:
+    b   loop
+
+    .thumb_func
+compute:
+    mov     r4, #7              @ working value parked in callee-saved
+    mov     r0, r4              @ AAPCS return slot, flags untouched
+    bx      lr
+```
+
+**Walkthrough:**
+
+1. `mov r4, #7` — stash the working value in a callee-saved register so a later call wouldn't clobber it.
+2. `mov r0, r4` — copy into r0 right before `bx lr`, the standard AAPCS return slot.
+3. `bx lr` — return; the caller sees `r0 == 7`.
+4. Using `MOV` rather than `MOVS` lets this idiom sit inside a conditional epilogue without trashing flags the caller's `cmp` had set.
 
 ## See also
 

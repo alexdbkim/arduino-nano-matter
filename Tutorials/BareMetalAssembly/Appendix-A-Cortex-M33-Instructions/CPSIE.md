@@ -14,6 +14,8 @@
 CPSIE <iflags>         @ <iflags> ∈ { i, f, if }
 ```
 
+**When you'd actually use this** — `CPSIE i` closes a critical section opened by `CPSID i`: it clears `PRIMASK` and any IRQs pended during the masked window fire on the very next cycle. Boot code uses it once, after the vector table, NVIC priorities, and stack pointer are set up — flipping IRQs on before that is a guaranteed crash on the first stray peripheral interrupt. Inside an RTOS or any nestable critical-section API, prefer `MSR PRIMASK, r0` to restore the *previous* mask state instead of unconditionally enabling — `CPSIE i` always enables, which is wrong if the caller was already in a critical section. `CPSIE f` is symmetrically rare; you only ever pair it with a deliberate `CPSID f`.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -53,6 +55,8 @@ Never updates flags.
 
 ## Example
 
+### Example 1 — boot-time IRQ enable after VTOR is installed
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -84,6 +88,36 @@ vector_table:
 3. `cpsie i` — clears `PRIMASK`. From here, any pending IRQ can fire; the rest of `_start` runs with interrupts on.
 
 This is the part that bites people: enabling IRQs *before* the SP and VTOR are valid is a classic "boots fine until I add a peripheral" bug. Always set up the world first, then `CPSIE i`.
+
+### Example 2 — RMW shared counter inside a CPSID/CPSIE pair
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Increment a 32-bit counter that an ISR also writes
+    cpsid   i                       @ enter critical section
+    ldr     r0, =g_ticks
+    ldr     r1, [r0]
+    adds    r1, r1, #1
+    str     r1, [r0]
+    cpsie   i                       @ exit — pending IRQ fires on next cycle
+loop:
+    b   loop
+
+    .data
+    .align 2
+g_ticks: .word 0
+```
+
+**Walkthrough:**
+
+1. `cpsid i` — mask configurable IRQs; the SysTick or GPIO ISR can't sneak in here.
+2. The three-instruction RMW now executes atomically.
+3. `cpsie i` — clear `PRIMASK`. Any IRQ that became pending during the section fires on the very next cycle — that's the *whole point* and also why critical sections must be short.
 
 ## See also
 

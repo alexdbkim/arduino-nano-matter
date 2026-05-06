@@ -17,6 +17,8 @@ LSL{S}{<cond>} {<Rd>,} <Rn>, <Rs>             @ register form
 
 Shift `Rm`/`Rn` left by N bit positions, zero-filling on the right. Bit 32 (the bit shifted out) lands in C when `S` is set.
 
+**When you'd actually use this** is **multiplying by a power of two** and **packing fields into a register**. `lsl r0, r0, #2` is `r0 * 4` in one cycle — far cheaper than `MUL`. It's how you scale a word index into a byte offset before a load (`ldr r2, [r3, r1, lsl #2]` indexes a 32-bit array), and how you slot a 4-bit field into bits [11:8] before `ORR`-ing it into a config word. It's also half of the standard zero-extend trick: `lsl #8` then `lsr #8` clears the top byte cleanly.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -65,6 +67,8 @@ For the register form, if `Rs<7:0> == 0`, C is unchanged and the value is simply
 
 ## Example
 
+### Example 1 — immediate vs register shift
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -88,6 +92,25 @@ loop:
 1. `lsl r1, r0, #4` — immediate form, multiply by 16. The compiler emits this for `x << 4`.
 2. `lsl r3, r0, r2` — register form, shift count comes from `r2`. Use this for variable-amount shifts.
 3. `lsls r5, r4, #1` — flag-setting variant. The MSB falls into C; perfect for software multi-precision shifts that chain `LSLS` then `ADC`/`ADCS`.
+
+### Example 2 — pack a nibble into bits [11:8]
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Insert the 4-bit value 0xA into bits [11:8] of a config word.
+    ldr     r0, =0x12340078        @ existing config (bits [11:8] already clear)
+    mov     r1, #0xA
+    orr     r0, r0, r1, lsl #8     @ r0 = 0x12340A78
+loop:
+    b   loop
+```
+
+**Walkthrough:** The shifted-register form lets `ORR` do the `LSL` for free — the CPU shifts `r1` by 8 inside the same instruction and ORs the result. If the destination field weren't already clear you'd `BIC` it first. Without the inline shift this would be two instructions: `lsl r1, r1, #8; orr r0, r0, r1`.
 
 ## See also
 

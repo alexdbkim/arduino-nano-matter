@@ -14,6 +14,9 @@
 VRINTX{<cond>}.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you specifically *want* to know whether the rounding actually changed the value — the X stands for "eXact-aware", and the instruction sets `FPSCR.IXC` whenever the rounded result differs from the input. Typical contexts: numerical-quality validation in unit tests ("was this constant exactly representable?"), transcendental-function range reduction where an exact integer multiple of π/2 needs to be detected without library overhead, and any routine that needs IEEE-754 `rintf` semantics including `FE_INEXACT`. Without `VRINTX` you'd compare `x` against `VRINTR(x)` manually after every round.
+
+
 `VRINTX` is the IEEE-754 `roundToIntegralExact` operation: round per current
 mode, and **set `FPSCR.IXC` if the result differs from the input**. Compare
 `VRINTR`, which does the same rounding but never sets `IXC`.
@@ -55,6 +58,9 @@ if SNaN(Sm)     then FPSCR.IOC = 1
 
 ## Example
 
+
+### Example 1 — rounds per FPSCR and signals inexact
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -85,6 +91,34 @@ loop:
 This is the part that bites people: `VRINTX` is the only `VRINT*` form that
 *intentionally* signals inexact. Use it for `nearbyint`-with-FE_INEXACT semantics.
 For `nearbyint` semantics that **don't** raise inexact, use [VRINTR](VRINTR.md).
+
+### Example 2 — detect whether a sample is exactly representable
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  is_integer_input
+    .thumb_func
+is_integer_input:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ s0 = input float; return r0 = 1 if input was already integral, else 0
+    vmrs       r1, fpscr
+    bic        r1, r1, #0x10            @ clear IXC (bit 4)
+    vmsr       fpscr, r1
+    vrintx.f32 s1, s0                   @ rounds; sets IXC iff input wasn't integral
+    vmrs       r1, fpscr
+    ubfx       r0, r1, #4, #1           @ r0 = IXC bit
+    eor        r0, r0, #1               @ flip: 1 means "was integral"
+    bx         lr
+```
+
+**Walkthrough:**
+
+1. Clear `FPSCR.IXC` so the next round is the only thing that can set it.
+2. `vrintx.f32 s1,s0` rounds per `FPSCR.RMode` *and* sets `IXC` if the value actually changed — which is exactly the IEEE-754 "was this exact?" test.
+3. Read back `FPSCR`, extract the `IXC` bit, invert it, and return — `r0 = 1` means the input was already an integer-valued float.
 
 ## See also
 

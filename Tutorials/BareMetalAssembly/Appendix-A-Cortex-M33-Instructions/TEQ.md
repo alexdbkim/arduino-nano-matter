@@ -17,6 +17,8 @@ TEQ{<cond>} <Rn>, #<const>
 
 `TEQ` is `EORS` with the result discarded. `Rn == operand2` ⇔ result is zero ⇔ `Z=1`.
 
+**When you'd actually use this** is checking **equality without disturbing C/V** — `TEQ` is `EORS` with the result thrown away, so it sets N and Z but doesn't touch V (and only updates C from the shifter, not from arithmetic). Compilers emit it for `if ((a ^ b) == 0)`-style comparisons and especially for sign-mismatch tests: N becomes bit 31 of `a ^ b`, which is "do `a` and `b` have different signs?" In hand-written code it's rare — `CMP` is usually clearer for "are they equal?" — but it's the right pick when you specifically want N to mean "sign bits differ".
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -62,6 +64,8 @@ Always updates N, Z, C.
 
 ## Example
 
+### Example 1 — equality without touching V
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -87,6 +91,29 @@ loop:
 2. `teq r0, #0` — equivalent to "test if `r0` is zero, also setting N to its sign bit". A close cousin of `CMP r0, #0` and `MOVS r0, r0`.
 
 This is the part that bites people: people reach for `CMP` for equality and that's fine, but `TEQ`'s extra trick is that **N gets the sign of `Rn ^ operand2`** — handy for "do these two values have the same sign?" when `operand2` is `Rm`: `TEQ Rn, Rm` then `BMI different_signs`.
+
+### Example 2 — detect different signs
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Branch if r0 and r1 have *different* signs.
+    ldr     r0, =0x7FFFFFFF        @ +max
+    ldr     r1, =0x80000000        @ -min
+    teq     r0, r1                 @ N = (r0 ^ r1)<31> = 1 iff signs differ
+    bmi     signs_differ           @ taken
+    b       same_sign
+signs_differ:
+same_sign:
+loop:
+    b   loop
+```
+
+**Walkthrough:** `(r0 ^ r1)<31>` is 1 exactly when `r0` and `r1` have different sign bits; `TEQ` surfaces that into N, and `BMI` branches on it. `CMP` cannot answer this question directly — its N depends on the result of a *subtraction*, not a sign-bit XOR.
 
 ## See also
 

@@ -16,6 +16,8 @@ VSTMDB <Rn>!,   {<Sx>-<Sy>}     @ decrement-before; writeback mandatory
 VSTM   <Rn>{!}, {<Sx>-<Sy>}     @ alias for VSTMIA
 ```
 
+**When you'd actually use this** — VSTM is the multi-register store: dump a contiguous run of FPU registers to memory in one instruction. Use it to (1) save a vector of filter outputs to a sample buffer, (2) drain accumulators after a DSP kernel, (3) save the FPU register file in an RTOS context switch when you aren't relying on lazy FPU stacking. It's the symmetric counterpart of VLDM and the architectural building block for VPUSH (= `VSTMDB SP!`).
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -60,6 +62,8 @@ if writeback:
 
 ## Example
 
+### Example 1 — store 4 floats with writeback
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -96,6 +100,43 @@ buf:
 5. `loop: b loop` — park.
 
 This is the part that bites people: register order in memory is *always* `S(low)` at the lowest address, regardless of `IA` vs `DB`. The mode only changes how the *base address* is computed, not the order of registers within the burst.
+
+### Example 2 — VSTMDB with writeback into a stack-like buffer
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VSTM demo 2: VSTMDB writeback - manual descending buffer (the same shape as VPUSH).
+    ldr      r0, =buf_end          @ R0 -> one past the end of buf (top of descending region)
+    vmov.f32 s0, #1.0
+    vmov.f32 s1, #2.0
+    vmov.f32 s2, #3.0
+    vmov.f32 s3, #4.0
+    vstmdb   r0!, {s0-s3}          @ R0 -= 16; writes S0 at new R0, S3 at R0+12
+loop:
+    b   loop
+
+    .section .bss
+    .align 2
+buf:
+    .space 16
+buf_end:
+```
+
+**Walkthrough:**
+
+1. `ldr r0, =buf_end` — the label `buf_end` sits *immediately after* `buf`'s 16 bytes, so `R0` points at one-past-end (the same shape SP has at the top of an empty stack).
+2. `vstmdb r0!, {s0-s3}` — **decrement-before**: `R0 -= 16` first, then write `S0` at the new `R0`, `S1` at `R0+4`, ..., `S3` at `R0+12`. After the instruction, `R0` points at `buf[0]` and the four floats fill `buf[0..15]`.
+3. This is exactly what `VPUSH {s0-s3}` does, just with `R0` instead of `SP`. If you ever want a *second* stack-like region (e.g. a private FPU register-save area in an RTOS task control block), `VSTMDB Rn!` is how you build it.
+4. `loop: b loop` — park.
+
+Note: `VSTMDB` always requires `!` — without writeback, "decrement-before" has no observable effect on `Rn` and the architecture forbids it.
 
 ## See also
 

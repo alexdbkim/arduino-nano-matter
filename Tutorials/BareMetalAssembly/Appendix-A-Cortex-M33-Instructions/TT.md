@@ -18,6 +18,8 @@ TT  <Rd>, <Rn>
 
 Look up the address in `Rn`; write the attribution result to `Rd`.
 
+**When you'd actually use this:** `TT` is the *bouncer* that lets Secure code peek at a pointer's SAU/IDAU/MPU attribution **without dereferencing it**. The canonical Arduino Nano Matter case: the Silicon Labs Secure Library receives a buffer pointer from the Non-secure Matter stack ("please fill this with a freshly-signed attestation blob") and must confirm the buffer is genuinely Non-secure memory — otherwise a malicious NS caller could trick Secure code into writing secrets *into* Secure memory it can later read back, the textbook *confused-deputy* attack. Without `TT`, Secure code would have no race-free way to validate NS pointer arguments, and every secure-callable would be a confused-deputy waiting to happen. The instruction does no load and cannot fault on the probed address, which is exactly why it can sit in front of every dereference.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -66,6 +68,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — Probing the NS bit on a received pointer
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -95,6 +99,32 @@ loop:
 3. The result in `r0` is what a Secure callee uses to decide whether to trust the Non-secure-supplied pointer before dereferencing it.
 
 This is the part that bites people: `TT` only inspects the **first byte** of the address. To validate a buffer you must probe the start *and* the last byte and confirm both fall in the same SAU region — otherwise an attacker can hand you a pointer that straddles a Secure boundary.
+
+### Example 2 — Pre-flight TT before a load
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Illustrative — full use requires a CMSE-enabled toolchain build.
+    @ TT demo 2: only dereference the pointer if the current state can read it.
+    @ r0 = address to read; we want r0 = *r0 on success, 0 on rejection.
+    tt      r1, r0              @ probe attribution of *r0
+    lsrs    r2, r1, #23
+    ands    r2, r2, #1          @ bit 23: readable from current security state
+    beq     .Lskip
+    ldr     r0, [r0]            @ safe to dereference
+    b       loop
+.Lskip:
+    movs    r0, #0
+loop:
+    b       loop
+```
+
+**Walkthrough:** `tt r1, r0` asks the SAU/IDAU/MPU what would happen if the *current* state (and current privilege) tried to access `*r0`. We extract the "readable in current state" bit and only proceed with the actual `ldr` if it is set; otherwise we return zero. Because `TT` performs no memory access, the probe itself cannot fault — making it the safe way to ask "is this address mine to read?" before the load that might otherwise raise a MemManage or SecureFault.
 
 ## See also
 

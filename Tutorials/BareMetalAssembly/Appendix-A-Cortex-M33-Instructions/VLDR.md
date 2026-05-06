@@ -15,6 +15,8 @@ VLDR.32 <Sd>, [<Rn>{, #±<imm>}]   @ register + immediate offset
 VLDR.32 <Sd>, <label>             @ PC-relative (assembler builds a literal pool)
 ```
 
+**When you'd actually use this** — VLDR is the everyday "bring one float into the FPU" instruction: load a coefficient or filter tap before a multiply, fetch a sensor sample, or pick a value out of a lookup table. Compilers also emit it implicitly for any `volatile float` access, since each read of a `volatile` becomes one memory transaction. Use VLDM when you need several consecutive registers — VLDR is the single-shot tool.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -57,6 +59,8 @@ VLDR is 32-bit Thumb-2 only — no 16-bit encoding, no writeback form (use VLDM 
 
 ## Example
 
+### Example 1 — literal-pool load and array indexing
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -91,6 +95,38 @@ pi:
 5. `loop: b loop` — park.
 
 This is the part that bites people: the immediate offset must be a multiple of 4 in `±1020`. Larger or unaligned offsets force you to materialise the address in a core register first.
+
+### Example 2 — load `1.0` from a labelled `.float` constant as a scale factor
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VLDR demo 2: load 1.0 from a literal constant and use it as a scale factor.
+    vldr.32  s0, one              @ S0 = 1.0 via PC-relative literal
+    vmov.f32 s1, #2.5             @ S1 = 2.5 (encoded immediate)
+    vmul.f32 s2, s0, s1           @ S2 = 1.0 * 2.5 = 2.5
+    vldr.32  s3, half             @ S3 = 0.5
+    vmul.f32 s4, s2, s3           @ S4 = 1.25
+loop:
+    b   loop
+
+    .align 2
+one:   .float 1.0
+half:  .float 0.5
+```
+
+**Walkthrough:**
+
+1. `vldr.32 s0, one` — assembler resolves `one` as a PC-relative offset and emits the VLDR. The CPU computes `Align(PC,4) + offset`, fetches one word, drops it in `S0`.
+2. `vmov.f32 s1, #2.5` — for *some* small floats (those representable in VFP's 8-bit immediate format) you can skip the literal pool entirely. `1.0` and `0.5` would also fit; `0.1` would not — that's why `0.1` would force a literal pool plus VLDR.
+3. `vmul.f32` chains two scaling steps to show the loaded constants flowing into real ops.
+4. `loop: b loop` — park.
 
 ## See also
 

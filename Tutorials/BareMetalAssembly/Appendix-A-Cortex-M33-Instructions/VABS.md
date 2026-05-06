@@ -16,6 +16,8 @@ FPv5-SP only — `.F64` is unavailable on EFR32MG24. Note: there's also a non-FP
 VABS.F32 <Sd>, <Sm>            @ Sd = |Sm|  (sign bit cleared)
 ```
 
+**When you'd actually use this** is whenever you need `|x|` cheaply — error magnitudes in a control loop, the absolute-value step before squaring in a sum-of-squares norm, or rectifying an AC-coupled audio sample. It's a pure sign-bit clear, so it's one cycle and never raises Invalid Operation, even on NaN. The naive alternative (compare-with-zero and conditional negate) costs at least three instructions and a branch — much worse inside a tight DSP loop. The first gotcha learners hit is unrelated to the math: if `CPACR.CP10/CP11` aren't set to `0b11` before you execute any V-instruction, even this one-cycle `VABS` raises a UsageFault (`NOCP`).
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -53,6 +55,8 @@ APSR untouched. FPSCR untouched.
 
 ## Example
 
+### Example 1 — 1-D distance `|x − y|`
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -74,6 +78,33 @@ loop:
 
 1. `vsub.f32 s2, s0, s1` — signed difference.
 2. `vabs.f32 s2, s2` — single-cycle sign-bit strip. Cheaper than a compare-and-negate.
+
+### Example 2 — running mean-absolute-error accumulator
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VABS demo 2: accumulate |error| into a running sum (MAE pre-step).
+    @ S0 = error sample (signed),  S1 = running sum of |error|
+    vabs.f32 s2, s0          @ S2 = |error|
+    vadd.f32 s1, s1, s2      @ sum += |error|
+    vabs.f32 s3, s0          @ next iteration's |error| (illustrative)
+    vadd.f32 s1, s1, s3      @ sum += |error|
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `vabs.f32 s2, s0` — strip the sign bit; the result is exactly `|error|` even when `error` was a denormal or NaN.
+2. `vadd.f32 s1, s1, s2` — fold into the running total. Two instructions per sample, fully pipelined — much tighter than a compare-and-conditional-negate dance.
+3. The repeat shows that `VABS` is non-destructive of `S0`, so you can take the absolute value into a fresh register and keep the original signed sample for derivative terms.
 
 ## See also
 

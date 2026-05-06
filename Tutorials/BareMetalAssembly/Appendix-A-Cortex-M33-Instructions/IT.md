@@ -14,6 +14,8 @@
 IT{x{y{z}}}   <firstcond>
 ```
 
+**When you'd actually use this**: `IT` lets you make 1–4 instructions conditional without the cost of a real branch — no pipeline-flush penalty, no extra label, denser code. The classic use cases are tiny ternaries (`r0 = (cond) ? a : b`), branchless absolute value, and saturating clamps. Without `IT` you'd write `Bcc skip; …; skip:`, which costs at least one branch instruction plus the not-taken pipeline behaviour. The thing that bites: the suffix has to *exactly* match the number of instructions in the block (`ITTE` = three instructions, no labels inside, no `B`/`BL`/`CBZ`/`IT`), and most instructions inside an `IT` block do **not** update flags — easy to forget and end up debugging "why is this `cmp` not setting `Z`?"
+
 `IT` introduces an *IT block* of one to four instructions that execute conditionally without an actual branch. The mnemonic suffix encodes the conditions of the following instructions:
 
 | Mnemonic | Block | Conditions of insns 1–4 |
@@ -81,6 +83,8 @@ ITSTATE.mask      = encoded(T/E pattern)
 
 ## Example
 
+### Example 1 — branchless absolute value + equality select
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -114,6 +118,32 @@ loop:
 4. `cmp r2, r3` — sets `Z` per equality.
 5. `ite eq` — opens a 2-instruction block: first instruction runs on `EQ`, second on the inverse (`NE`).
 6. `moveq r1, #1` / `movne r1, #0` — exactly one of these takes effect, giving a branchless select.
+
+### Example 2 — set a flag iff non-zero
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #0          @ default flag = 0
+    movs    r1, #5          @ value to test
+    cmp     r1, #0
+    it      ne              @ 1-instruction "then" block, condition NE
+    movne   r0, #1          @ runs only when r1 != 0
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `movs r0, #0` — pre-seed the result to "false". `IT` only conditionally executes one arm; the default has to be set before the block.
+2. `cmp r1, #0` — sets `Z` based on whether `r1` is zero.
+3. `it ne` — opens a single-instruction block with condition NE (Z == 0).
+4. `movne r0, #1` — runs only when `Z == 0`. The condition suffix is mandatory and must match the IT mask.
+5. Net effect: `r0 = (r1 != 0) ? 1 : 0`, branchless, four halfwords total.
 
 ## See also
 

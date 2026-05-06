@@ -15,6 +15,8 @@ VCMP.F32  <Sd>, <Sm>          @ Sd vs Sm
 VCMP.F32  <Sd>, #0.0          @ Sd vs +0.0 (immediate form, only #0.0 is legal)
 ```
 
+**When you'd actually use this** — VCMP is the FPU comparison primitive: bounds-check a sensor reading against a configured limit, test a control-loop measurement against a setpoint, or sniff for NaN on suspect inputs. The classic gotcha is the *flag plumbing*: VCMP writes **FPSCR**'s flag bits, not APSR's, so you must follow it with `VMRS APSR_nzcv, FPSCR` before any conditional branch. Without that bridge you'd be stuck computing `a - b` and reading the sign bit by hand — a trick that silently breaks on NaN inputs, where `a - b` yields NaN and the sign bit is meaningless.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -65,6 +67,8 @@ Updates **FPSCR** flags, not APSR. Use `VMRS APSR_nzcv, FPSCR` to bridge before 
 
 ## Example
 
+### Example 1 — FPSCR→APSR bridge for `BGT` against `#0.0`
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -97,6 +101,45 @@ loop:
 5. `loop: b loop` — park.
 
 This is the part that bites people: VCMP updates **FPSCR**, not APSR. Without the VMRS, your branch is testing leftover integer flags from whatever ran before. Always `VCMP` → `VMRS APSR_nzcv, FPSCR` → conditional branch, in that order, with no integer flag-setting instructions in between.
+
+### Example 2 — sensor exceeds threshold
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VCMP demo 2: raise an alarm flag if a sensor reading exceeds a threshold.
+    ldr      r0, =sensor
+    vldr.32  s0, [r0]            @ S0 = current reading
+    vldr.32  s1, threshold       @ S1 = alarm threshold (PC-relative literal)
+    vcmp.f32 s0, s1              @ FPSCR.NZCV <- compare(S0, S1)
+    vmrs     APSR_nzcv, FPSCR    @ gotcha: copy FPSCR flags to APSR before BGT
+    bgt      raise_alarm
+    movs     r1, #0               @ reading within bounds
+    b        done
+raise_alarm:
+    movs     r1, #1
+done:
+loop:
+    b   loop
+
+    .align 2
+sensor:    .float 42.7
+threshold: .float 30.0
+```
+
+**Walkthrough:**
+
+1. `vldr.32 s0, [r0]` / `vldr.32 s1, threshold` — pull the live reading and the configured threshold into the FPU. `threshold` uses VLDR's PC-relative literal form.
+2. `vcmp.f32 s0, s1` — IEEE compare; `42.7 > 30.0` so FPSCR gets `N=0, Z=0, C=1, V=0` (the "greater than" pattern).
+3. `vmrs APSR_nzcv, FPSCR` — **the bridge**. Without this line, `BGT` below tests whatever junk was last in APSR. With it, APSR.NZCV mirrors FPSCR.
+4. `bgt raise_alarm` — taken because of the GT pattern; `R1` is set to `1`.
+5. `loop: b loop` — park.
 
 ## See also
 

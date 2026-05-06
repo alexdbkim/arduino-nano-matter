@@ -15,6 +15,8 @@ VPUSH {<Sx>-<Sy>}        @ alias for VSTMDB SP!, {Sx-Sy}
 VPUSH {<Dx>-<Dy>}        @ alias for VSTMDB SP!, {Dx-Dy}
 ```
 
+**When you'd actually use this** — VPUSH is the function-prologue partner to `VPOP`. Use it whenever a function clobbers callee-saved FPU registers (`S16–S31` / `D8–D15` per AAPCS-VFP); the compiler emits it automatically, and you'll write it by hand in asm shims, RTOS task entry stubs, or FPU-using interrupt handlers that need to be transparent to the interrupted code (when lazy FPU stacking isn't doing the job for you).
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -58,6 +60,8 @@ VPUSH is exactly `VSTMDB SP!, {list}` — same encoding, friendlier mnemonic.
 
 ## Example
 
+### Example 1 — callee-saved save (S16–S17)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -89,6 +93,35 @@ loop:
 5. `loop: b loop` — park.
 
 This is the part that bites people: VPUSH/VPOP register lists must be **contiguous**. Saving `{s16, s18}` is illegal — you'd have to save `{s16-s18}` or do two pushes. Also, mixing core PUSH and VPUSH around a call is fine, but be consistent about ordering: typically `PUSH {regs, lr}` first, then `VPUSH {s..}`, and VPOP/POP in reverse.
+
+### Example 2 — D-form push (D8–D11) for double-precision-aliased state
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VPUSH demo 2: D-form push of D8..D11 (== S16..S23 transfer-aliased).
+    vpush    {d8-d11}             @ SP -= 32; saves 4 D regs = 8 S regs (S16..S23)
+    vmov.f32 s16, #1.0            @ body scribbles the underlying S regs
+    vmov.f32 s23, #9.0
+    vpop     {d8-d11}             @ undo: list must mirror the VPUSH exactly
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `vpush {d8-d11}` — D-form push. On Cortex-M33's FPv5-SP, `D8` aliases the pair `S16:S17`, `D9` aliases `S18:S19`, etc. Even though the FPU can't *compute* on doubles here, the **transfer** instructions still treat `D` regs as 64-bit chunks. SP drops by `4 × 8 = 32` bytes.
+2. The body writes via the `S` aliases — both views see the same physical bytes.
+3. `vpop {d8-d11}` — symmetric restore. You can mix views (push D, pop S) only if the byte counts and register coverage match exactly; safer to keep the same form.
+4. `loop: b loop` — park.
+
+Practical use: the D-form is one byte shorter to write in source and matches what compilers emit for code built with `-mfpu=fpv4-d16` / `-mfpu=fpv5-d16` (double-precision-capable variants). On bare M33+SP you'll most often see the S-form.
 
 ## See also
 

@@ -15,6 +15,8 @@ AND{S}{<cond>} {<Rd>,} <Rn>, <Rm>{, <shift>}
 AND{S}{<cond>} {<Rd>,} <Rn>, #<const>
 ```
 
+**When you'd actually use this** is the workhorse of **bit masking**. When you read a peripheral status register and only care about a couple of flag bits, you `AND` away the rest with a constant mask; the same trick keeps an index inside a power-of-two ring buffer (`and r0, r0, #(SIZE-1)` is one cycle, vs. dozens for a `UDIV`). The `ANDS` form lets you test-and-go in a single instruction — `ands r0, r0, #FLAG; bne handler` — saving the separate `TST` you'd otherwise need. For just isolating a single bit-field, `UBFX` may read cleaner, but plain `AND` with a mask works on every Thumb-2 core and is what compilers emit for `x & MASK`.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -63,6 +65,8 @@ Flags update **only when the `S` suffix is present** (`ANDS`). C comes from the 
 
 ## Example
 
+### Example 1 — low-nibble masking
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -85,6 +89,29 @@ loop:
 1. `and r1, r0, #0x0F` — masks off everything except bits [3:0]. No flag update.
 2. `ands r2, r0, #0xF0000000` — same idea on the top nibble; the `S` makes N reflect bit 31 of the result.
 3. `ands r4, r3, r3` — common idiom for "test if a register is zero" without clobbering it.
+
+### Example 2 — branch on any peripheral flag
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Branch to handler if BUSY (bit 0) or ERROR (bit 4) is set in STATUS.
+    ldr     r1, =0x40000000        @ pretend peripheral STATUS register
+    ldr     r0, [r1]
+    ands    r2, r0, #0x11          @ mask BUSY | ERROR; updates Z in one go
+    bne     handler                @ Z=0 -> at least one flag was set
+    b       done
+handler:
+done:
+loop:
+    b   loop
+```
+
+**Walkthrough:** `ANDS` does the masking and the flag update in a single instruction — no separate `TST` needed, and `r2` retains the masked bits in case you want to dispatch on which flag fired. Without `ANDS` you'd need `and r2, r0, #0x11; cmp r2, #0; bne handler` — three instructions for the same effect.
 
 ## See also
 

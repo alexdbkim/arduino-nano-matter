@@ -16,6 +16,8 @@ REV16{<cond>} <Rd>, <Rm>
 
 Swaps bytes inside each 16-bit halfword of `<Rm>` independently, leaving the halfwords in their original positions. Use it when you've loaded **two** big-endian 16-bit values packed in one word and need both swapped.
 
+**When you'd actually use this** — you've done a 32-bit load that happens to span two adjacent 16-bit big-endian fields: a pair of audio samples coming back from an I²S codec word, two ADC channel readings packed by a DMA in halfword pairs, or two consecutive 16-bit register fields from a sensor. `REV16` byte-swaps each lane in one cycle without mixing them; `REV` would have wrongly merged the two halfwords together.
+
 ## Operands
 
 | Field  | Type        | Constraints                                       |
@@ -54,6 +56,8 @@ Never updates flags.
 
 ## Example
 
+### Example 1 — swap a packed pair of big-endian samples
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -82,6 +86,30 @@ loop:
 3. `rev r2, r0` — for contrast: full-word swap mixes the two halfwords together. That's not what you want when each halfword is an independent value.
 
 This is the part that bites people: pick `REV16` (per-halfword) vs `REV` (whole-word) based on **what the bytes mean**, not just where the swap "should" happen.
+
+### Example 2 — byte-swap a single big-endian halfword and zero-extend
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ A device returns an unsigned 16-bit value MSB-first. We loaded it
+    @ as a halfword (so it sits in r0[15:0] byte-swapped) and we want
+    @ a clean native u16 in r2.
+    ldr     r0, =0x00001234      @ raw halfword as read (high byte = 0x12, low = 0x34)
+    rev16   r1, r0               @ r1 low halfword now byte-swapped: 0x3412
+    uxth    r2, r1               @ r2 = 0x00003412 — clean native u16
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `rev16 r1, r0` — swaps the bytes inside the low halfword (`0x1234 → 0x3412`); the high halfword is also swapped but it's zero so we ignore it.
+2. `uxth r2, r1` — masks `r1` to its low 16 bits, giving a tidy native u16. If you also wanted *signed* big-endian-to-native, [`REVSH`](REVSH.md) does the swap and sign-extension as one instruction; here we wanted unsigned, so `REV16` + `UXTH` is the right pairing.
 
 ## See also
 

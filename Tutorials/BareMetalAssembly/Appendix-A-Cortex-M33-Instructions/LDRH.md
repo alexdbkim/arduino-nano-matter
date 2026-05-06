@@ -20,6 +20,8 @@ LDRH{<cond>}  <Rt>, <label>
 
 Reads 16 bits and zero-extends. For sign-extension see [`LDRSH`](LDRSH.md).
 
+**When you'd actually use this.** `LDRH` is the right load for any `uint16_t` source: 12-bit ADC samples that the peripheral places in the low half of a 16-bit FIFO word, packed audio buffers, UTF-16 code units, or 16-bit fields of a packet header. Zero-extension is what you want when the value is unsigned — the upper bits become 0, never sign-bits. The scaled-register form `[Rn, Rm, lsl #1]` is the canonical `uint16_t[]` indexer because each element is two bytes wide. Skipping `LDRH` and doing an `LDR` followed by `AND r, r, #0xFFFF` would cost an extra instruction and risk an unaligned-word fault at a half-word-aligned address that wasn't also word-aligned.
+
 ## Operands
 
 | Field   | Type                 | Constraints                                                         |
@@ -65,6 +67,8 @@ if wback then R[n] = offset_addr;
 
 ## Example
 
+### Example 1 — reading 16-bit ADC samples with scaled index
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -93,6 +97,32 @@ adc_buffer:
 2. `ldrh r2, [r0, #2]` — fetches the second sample.
 3. `ldrh r4, [r0, r3, lsl #1]` — `lsl #1` scales the index by 2 because each element is 2 bytes — the canonical pattern for `uint16_t[]` lookup.
 4. `ldrh r5, [r0], #2` — typical streaming read: take a sample, advance the pointer.
+
+### Example 2 — polling a 16-bit peripheral interrupt-flags register
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ LDRH demo 2: poll a 16-bit peripheral interrupt-flags register (MMIO).
+    ldr     r0, =0x4000A000         @ pretend timer base
+poll:
+    ldrh    r1, [r0, #0x10]         @ IF (interrupt-flag) register, 16-bit
+    tst     r1, #(1 << 0)           @ test the OVF (overflow) bit
+    beq     poll                    @ spin until set
+    ldrh    r2, [r0, #0x14]         @ snapshot adjacent 16-bit register
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `ldrh r1, [r0, #0x10]` — half-word read at *base + 0x10*; the address is half-word aligned (offset is even) and the upper 16 bits of R1 are zeroed automatically.
+2. `tst` + `beq poll` — wait for the OVF flag to assert without modifying R1.
+3. `ldrh r2, [r0, #0x14]` — read another adjacent 16-bit register from the same peripheral block, reusing the base pointer in R0.
 
 ## See also
 

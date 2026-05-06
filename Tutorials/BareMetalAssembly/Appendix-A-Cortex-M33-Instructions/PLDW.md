@@ -14,6 +14,8 @@
 PLDW [<Rn>{, #<imm>}]      @ Armv7-A only — do NOT emit on Cortex-M33
 ```
 
+**When you'd actually use this** — you wouldn't, on Cortex-M33. `PLDW` is an Armv7-A multiprocessing-extension hint for upcoming *writes* to a shared cache line, and Armv8-M never adopted it. The mnemonic appears in this reference purely so that when you're porting Cortex-A DSP source to the Nano Matter and the assembler rejects `pldw`, you know what to substitute (a `NOP`, or just delete it). On M33 there's no D-cache to coordinate, so the hint has nothing to optimise even if it were encodable — gate it behind `#ifdef __ARM_ARCH_8M_MAIN__` in portable code.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -54,6 +56,8 @@ PLDW [<Rn>{, #<imm>}]      @ Armv7-A only — do NOT emit on Cortex-M33
 
 Because `PLDW` is not encodable for Cortex-M33, there is no compilable example. If you have portable code that uses it, gate it behind an architecture macro and substitute `NOP` (or just nothing) on Armv8-M targets:
 
+### Example 1 — Portable shim that compiles on M33
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,34 @@ loop:
 2. `movs r0, #0` — proves we successfully assembled past the shim.
 
 This is the part that bites people: third-party DSP/RTOS sources written for Cortex-A sometimes sprinkle `PLDW` into hot loops. When you retarget to the Nano Matter you'll get a hard assembler error — strip them, or wrap them in `#ifdef`.
+
+### Example 2 — Macro shim wrapping a write hint
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    ldr     r0, =shared
+    @ PLDW_SHIM macro: pldw [r0] on Armv7-A, nop on Armv8-M.
+    nop                         @ <-- where pldw [r0] would live
+    movs    r1, #1
+    str     r1, [r0]            @ the real write the hint advertised
+loop:
+    b   loop
+
+    .data
+    .align 2
+shared: .word 0
+```
+
+**Walkthrough:**
+
+1. `nop` — the M33-side substitute. A header decides via `#if __ARM_ARCH_PROFILE == 'A'` whether to emit `pldw [r0]` here or this NOP.
+2. `str r1, [r0]` — the actual write the hint was advertising. Correctness doesn't depend on the hint either way.
+3. Keeping the shim avoids two divergent versions of the source — the M33 build assembles cleanly and the Cortex-A build still gets its prefetch.
 
 ## See also
 

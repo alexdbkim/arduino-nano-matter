@@ -16,6 +16,8 @@ FPv5-SP only. Like `VMLA` but with **a single IEEE-754 rounding** at the end —
 VFMA.F32 <Sd>, <Sn>, <Sm>      @ Sd = Sd + (Sn * Sm)   [single rounding]
 ```
 
+**When you'd actually use this** — any inner loop that accumulates products: dot products, FIR taps, matrix-vector multiplies, Horner polynomial evaluation, IIR filters, Kalman covariance updates. `VFMA` rounds **once** at the end (the `Sn*Sm` product is held in extended precision before the add), so each step keeps roughly one extra bit of precision compared to the legacy two-round `VMLA`. Across an N-tap accumulation that roughly halves the worst-case round-off — often the difference between a stable Kalman filter and one that quietly diverges. Compilers emit `VFMA` whenever C99 `fma()` or `-ffp-contract=fast` is allowed; reach for it by hand in DSP hot loops where the alternative — a chain of `VMUL`+`VADD` or `VMLA` — is strictly less accurate at the same cycle count.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -51,6 +53,8 @@ APSR untouched.
 
 ## Example
 
+### Example 1 — linear interpolation `lerp(a, b, t)`
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -74,6 +78,27 @@ loop:
 1. `vsub.f32 s3, s1, s0` — compute `b - a` (one rounding; unavoidable).
 2. `vmov.f32 s4, s0` — seed the accumulator with `a`.
 3. `vfma.f32 s4, s3, s2` — the magic: `(b-a)*t` is held in extended precision and added to `a` before the single final round. This is the part that bites people writing `a + (b-a)*t` with `VMLA` and getting last-bit drift.
+
+### Example 2 — one tap of a 4-tap FIR filter
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  fir_tap
+    .thumb_func
+fir_tap:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ One body of a 4-tap FIR: y += h[i] * x[i]
+    @ S0 = y (running output), S1 = h[i] (coefficient), S2 = x[i] (sample)
+    vfma.f32 s0, s1, s2      @ y += h*x   (single rounding per tap)
+    bx      lr
+```
+
+**Walkthrough:**
+
+1. `vfma.f32 s0, s1, s2` — advances the running output by exactly one tap with **one** IEEE rounding. Unrolled four times, a 4-tap FIR costs 4 roundings end-to-end; the `VMLA` version of the same loop costs 8. In a 64-tap FIR that's the difference between an audibly clean filter and one with visible quantisation hash on the output spectrum.
 
 ## See also
 

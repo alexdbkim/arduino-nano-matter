@@ -16,6 +16,8 @@ LDAEXB  <Rt>, [<Rn>]
 
 Byte version of [`LDAEX`](LDAEX.md). Acquire ordering plus exclusive-monitor arming, byte-sized. Pairs with [`STLEXB`](STLEXB.md).
 
+**When you'd actually use this** a byte-wide lock or refcount needs both atomicity *and* acquire ordering — common in 8-bit lock fields packed beside the data they protect, or byte-sized refcounts in cache-line-sensitive structs. `LDAEXB` arms the monitor on a single byte and fences subsequent loads. Pairs with `STLEXB`. Without it, a byte mutex would either need `LDREXB`/`STREXB` plus a separate `DMB`, or the heavy hammer of disabling all interrupts.
+
 ## Operands
 
 | Field  | Type                 | Constraints                          |
@@ -49,6 +51,8 @@ R[t] = ZeroExtend(MemA_with_acquire[address, 1], 32);
 - BusFault / MemManage / SecureFault as for [`LDRB`](LDRB.md). No UNALIGNED.
 
 ## Example — paired with STLEXB
+
+### Example 1 — Byte test-and-set spinlock
 
 ```asm
     .syntax unified
@@ -85,6 +89,44 @@ lock:
 2. Spin if already taken.
 3. `stlexb r2, r3, [r0]` — write 1 with release ordering, conditional on the monitor.
 4. Release with `STLB` so the *exit* of the critical section also has correct ordering. This is the part that bites people: pairing `LDREXB` with `STLEXB` (mixing acquire-naked and release-paired) silently works on M33 but is wrong portably; use the matched LDAEX/STLEX family throughout an atomic.
+
+### Example 2 — Atomic byte refcount increment
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Atomic refcount++: ref must be < 255 (saturate otherwise).
+    ldr     r0, =refcount
+inc:
+    ldaexb  r1, [r0]                @ acquire + arm
+    cmp     r1, #0xFF
+    beq     full                    @ saturated — bail without writing
+    adds    r1, r1, #1
+    stlexb  r2, r1, [r0]            @ release + commit
+    cmp     r2, #0
+    bne     inc                     @ contention — retry
+    b       done
+full:
+    clrex                           @ drop reservation cleanly
+done:
+loop:
+    b       loop
+
+    .data
+refcount:
+    .byte   0
+    .align  2
+```
+
+**Walkthrough:**
+
+1. `LDAEXB` reads the refcount byte, zero-extends, arms the byte monitor, and acquire-fences subsequent loads of any object the refcount protects.
+2. On the saturate path we don't issue `STLEXB`; we explicitly `CLREX` so the monitor is dropped without committing.
+3. On success, `STLEXB` writes the incremented byte with release ordering — pairing cleanly with any subsequent reader doing `LDAEXB` to read the count.
 
 ## See also
 

@@ -19,6 +19,8 @@ STRB{<cond>}  <Rt>, [<Rn>], #<imm>
 
 Stores `R[t]<7:0>`. Bits [31:8] of the register are ignored — there is no signed/unsigned distinction on stores.
 
+**When you'd actually use this**: writing one byte at a time — emitting a character to a UART transmit register that's only byte-wide, building up a C string in a RAM buffer, packing a `uint8_t` field into a packed struct, or zero-terminating a name. Byte stores have no alignment requirement (any address works), which is exactly why `STRB` is the safe building block for byte-granular peripheral registers and unaligned packed-struct writes. Without `STRB` you'd have to read-modify-write a whole word with `LDR`/bit-mask/`STR`, which is three instructions and not atomic across an interrupt.
+
 ## Operands
 
 | Field   | Type            | Constraints                                              |
@@ -60,6 +62,8 @@ if wback then R[n] = offset_addr;
 
 ## Example
 
+### Example 1 — Build a C string byte-by-byte
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -91,6 +95,31 @@ buffer:
 1. `strb r1, [r0]` — writes the low byte of R1 ('H') to `buffer[0]`. Bits 8..31 of R1 are ignored.
 2. The `'i'` and NUL stores complete a C string.
 3. `strb r2, [r0], #1` — the post-indexed form is the natural shape of a `*p++ = byte;` loop. This is the part that bites people: signed/unsigned doesn't enter into stores, but the *value* you stash must fit in 8 bits or you'll silently truncate.
+
+### Example 2 — Poke a UART TX byte register
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Send 'A' out a hypothetical byte-wide UART TX register.
+    ldr     r0, =0x40010000     @ UART base
+    movs    r1, #'A'
+    strb    r1, [r0, #0x24]     @ UART->TXDATA = 'A'
+    movs    r1, #'\n'
+    strb    r1, [r0, #0x24]     @ UART->TXDATA = '\n'
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. The base + immediate offset form (`[r0, #0x24]`) is the canonical way to address a single peripheral register relative to a held base pointer — exactly what `peripheral->TXDATA = c;` compiles to.
+2. Each `STRB` triggers one byte-sized bus transaction; the UART's TX FIFO consumes the byte and the upper 24 bits of `r1` are simply discarded.
+3. No alignment worry — `0x40010024` is fine for `STRB` even though it's not word-aligned.
 
 ## See also
 

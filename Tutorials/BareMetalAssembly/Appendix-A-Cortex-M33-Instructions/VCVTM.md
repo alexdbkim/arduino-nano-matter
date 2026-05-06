@@ -15,6 +15,9 @@ VCVTM.S32.F32   <Sd>, <Sm>
 VCVTM.U32.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you need `(int)floorf(x)` in a single instruction. The mnemonic: **M = Minus-infinity = floor** — always rounds *down* the number line, so 2.9→2 and −2.1→−3 (note that for negative inputs this disagrees with truncation by one). Typical contexts: histogram-bin index assignment with signed inputs, conservative cap-at-floor in safety-critical limit checks, and any pixel/grid-cell lookup where a half-pixel underflow must round down rather than toward zero. Without it, computing `int floor(x)` requires comparing sign, fractional part, and adjusting by ±1 — many cycles instead of one.
+
+
 Unconditional. Equivalent to `(int)floorf(x)`.
 
 ## Operands
@@ -56,6 +59,9 @@ Independent of `FPSCR.RMode`.
 
 ## Example
 
+
+### Example 1 — round DOWN (toward −∞)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -87,6 +93,29 @@ loop:
 
 This is the part that bites people: for negative numbers, `(int)x` (i.e. `VCVT`)
 and `floorf(x)` (i.e. `VCVTM`) **disagree by one**. Pick the one you actually want.
+
+### Example 2 — one-instruction floor() for signed bin index
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  bin_index
+    .thumb_func
+bin_index:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ s0 = signed value in [-N/2, +N/2) scaled to bin units
+    vcvtm.s32.f32 s1, s0          @ s1 = floor(s0)  (correct for negatives)
+    vmov          r0, s1
+    bx            lr
+```
+
+**Walkthrough:**
+
+1. `s0` holds a signed coordinate already scaled to bin units; for, say, −0.3 we want bin **−1**, not 0.
+2. `vcvtm.s32.f32 s1,s0` does true floor — −0.3 → −1, 2.9 → 2.
+3. Using plain `VCVT.S32.F32` here would truncate −0.3 → 0 and put two adjacent bins on top of each other — the classic off-by-one in histogram code.
 
 ## See also
 

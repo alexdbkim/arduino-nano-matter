@@ -14,6 +14,8 @@
 UQSUB8 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `UQSUB8` is the saturating unsigned byte-wise subtract: each lane computes `max(0, a−b)` for free, because underflow clamps to zero rather than wrapping to 255. That makes it the natural primitive for byte-wise *positive* differences between two image rows (background subtraction, threshold-by-difference, contrast stretching), and for the front half of an SAD-style motion-detector before pairing with `UQSUB8` on the swapped operands. Without `UQSUB8` you'd need a per-lane compare-and-conditional-subtract or four `UXTB`/scalar/`STRB` sequences — ~8 cycles versus 1.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-byte unsigned saturating subtract
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,32 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `uqsub8 r0, r1, r2` treats each register as 4 packed byte lanes and subtracted them lane-by-lane.
 3. Each lane is then **saturated** to the unsigned `8`-bit range — no wrap-around, and `APSR.Q` is **not** updated.
+
+### Example 2 — byte-wise saturating row difference between two image rows
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Compute |row_A - row_B| floored at 0 for four pixels per word.
+    @ Pair this with a swapped-operand uqsub8 + uadd8 to get true |a-b|.
+    movw    r0, #0x80FF         @ row A pixels: 0x80, 0xFF, ...
+    movt    r0, #0x4020
+    movw    r1, #0x6010         @ row B pixels
+    movt    r1, #0x9050
+    uqsub8  r2, r0, r1          @ each lane: max(0, A - B), no wrap to 0xFF
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` and `r1` each carry four unsigned 8-bit pixel intensities from corresponding rows.
+2. `uqsub8` computes `max(0, A − B)` per lane in one cycle — underflow floors at zero rather than wrapping to `0xFF`, which is exactly what background-subtraction wants.
+3. To get the symmetric absolute difference, do a second `uqsub8 r3, r1, r0` and OR the results — still 2 cycles for four pixels, versus ~10 cycles of scalar code with explicit `CMP`/conditional-subtract.
 
 ## See also
 

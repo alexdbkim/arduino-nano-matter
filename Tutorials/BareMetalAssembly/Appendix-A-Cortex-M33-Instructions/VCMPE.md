@@ -15,6 +15,8 @@ VCMPE.F32 <Sd>, <Sm>          @ Sd vs Sm; signals on any NaN
 VCMPE.F32 <Sd>, #0.0          @ Sd vs +0.0
 ```
 
+**When you'd actually use this** — VCMPE is VCMP's strict-IEEE sibling: same comparison, same NZCV mapping, but it *also* sets `FPSCR.IOC` (Invalid Operation) on **any** NaN — including quiet NaNs. Reach for it in safety-critical or numerical code where a NaN input means "your data is broken" and you want a checkable record, not a silent "unordered" result. Like VCMP, the comparison output lands in FPSCR; you still need `VMRS APSR_nzcv, FPSCR` (or `VMRS Rt, FPSCR` + `TST` for the IOC bit) before branching.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -66,6 +68,8 @@ Writes FPSCR.{N,Z,C,V}. APSR untouched — bridge with `VMRS APSR_nzcv, FPSCR`.
 
 ## Example
 
+### Example 1 — ordered compare with NaN trap via IOC
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -114,6 +118,46 @@ val_b:
 6. `loop: b loop` — park.
 
 This is the part that bites people: choose `VCMPE` whenever NaN means "input was bad and downstream code shouldn't trust the comparison". Use plain `VCMP` only when you genuinely want unordered = "not less and not greater" silently.
+
+### Example 2 — validate input via IOC + ordered branch
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VCMPE demo 2: only accept S0 if it's an ordered, non-negative number.
+    vmov.f32 s0, #2.5
+    vmov.f32 s1, #1.0
+    vcmpe.f32 s0, s1             @ ordered compare; NaN -> FPSCR.IOC = 1
+    vmrs     r0, FPSCR           @ snapshot FPSCR (need IOC, not just NZCV)
+    tst      r0, #1              @ FPSCR.IOC == 1 ?
+    bne      bad_input           @ NaN seen -> reject
+    vmrs     APSR_nzcv, FPSCR    @ no NaN: bridge NZCV for the ordered branch
+    blt      lt_path
+    movs     r2, #0               @ S0 >= S1
+    b        done
+lt_path:
+    movs     r2, #1               @ S0 < S1
+    b        done
+bad_input:
+    movs     r2, #-1              @ NaN sentinel
+done:
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `vcmpe.f32 s0, s1` — strict ordered compare. With `2.5` and `1.0` (both finite), no NaN, so `FPSCR.IOC` stays clear and NZCV is "GT".
+2. `vmrs r0, FPSCR` — snapshot the *whole* FPSCR. `VMRS APSR_nzcv` would discard IOC; we need it.
+3. `tst r0, #1` + `bne bad_input` — explicit NaN gate. This is the `VCMPE`-only payoff: a quiet NaN here would also have routed to `bad_input`, where plain `VCMP` would have silently fallen through to the BLT branch with the unordered NZCV pattern.
+4. `vmrs APSR_nzcv, FPSCR` — only reached on clean inputs; bridge for `BLT`.
+5. `loop: b loop` — park.
 
 ## See also
 

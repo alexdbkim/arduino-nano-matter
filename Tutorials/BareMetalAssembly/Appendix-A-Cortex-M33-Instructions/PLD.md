@@ -16,6 +16,8 @@ PLD  [<Rn>, <Rm>{, LSL #<shift>}]
 PLD  <label>                   @ PC-relative literal form
 ```
 
+**When you'd actually use this** is in DSP or throughput-critical loops with predictable access patterns, where hinting the next cache line ahead of a read can hide DRAM/external-memory latency on bigger Cortex cores. On the Cortex-M33 inside the EFR32MG24 there's no architecturally visible D-cache, so `PLD` decodes as a NOP — completely harmless. The reason to keep it in the source anyway is portability: the same code may be retargeted at an M7 or A-class core where the prefetch genuinely earns its keep, and stripping it ahead of time would mean re-tuning later.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -59,6 +61,8 @@ No 16-bit form.
 
 ## Example
 
+### Example 1 — Hint upcoming reads
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -87,6 +91,38 @@ g_buf: .skip 64
 3. The real `ldr` reads follow. On this chip you get no speedup; on a portable codebase you do.
 
 This is the part that bites people: don't *rely* on `PLD` for correctness. It's a hint, not an access. If you need the data in memory, issue a real load.
+
+### Example 2 — Prefetch the next line in a copy loop
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    ldr     r0, =src
+    ldr     r1, =dst
+    movs    r2, #16             @ word count
+1:  pld     [r0, #32]           @ hint line we'll read next iter
+    ldr     r3, [r0], #4
+    str     r3, [r1], #4
+    subs    r2, r2, #1
+    bne     1b
+loop:
+    b   loop
+
+    .data
+    .align 4
+src: .skip 64
+dst: .skip 64
+```
+
+**Walkthrough:**
+
+1. `pld [r0, #32]` — issue the hint *before* the dependent load, far enough ahead (one cache line ≈ 32 bytes) that a real cache miss could overlap with this iteration's work.
+2. The actual `ldr/str` does the copy. On M33 the `pld` is a NOP, so this loop runs identically to one without it.
+3. Recompiled for a Cortex-M7 or A-class core, the prefetch overlaps with load latency and shrinks the loop's miss penalty — same source, free speed-up.
 
 ## See also
 

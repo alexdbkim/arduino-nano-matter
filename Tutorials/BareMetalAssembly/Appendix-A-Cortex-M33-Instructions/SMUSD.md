@@ -14,6 +14,8 @@
 SMUSD <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — the **real** part of a complex Q15 product `(a+bi)(c+di) = (a·c − b·d) + j(a·d + b·c)` is one SMUSD (`a·c − b·d`). Pair it with SMUADX (`a·d + b·c`) and you have one complete complex multiply in two instructions — the FFT butterfly's arithmetic core. Also the natural choice for the first iteration of a real-axis complex dot product (then continue with SMLSD). Without it an FFT butterfly takes ~6 instructions instead of 2.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -54,6 +56,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — Real part of complex multiply, no accumulator
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -73,6 +77,31 @@ loop:
 
 1. Pack `[imag:real]` halves.
 2. `smusd` returns `Rn[lo]*Rm[lo] - Rn[hi]*Rm[hi]` — the real part of `(a+bi)(c+di)`.
+
+### Example 2 — SMUSD + SMUADX = full complex multiply (FFT butterfly seed)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Multiply complex sample x = a+bi by twiddle w = c+di.
+    @ Result: r0 = Re(x*w) = a*c - b*d, r1 = Im(x*w) = a*d + b*c.
+    ldr     r2, =0x00020001     @ x: [b=2 : a=1]
+    ldr     r3, =0x00040003     @ w: [d=4 : c=3]
+    smusd   r0, r2, r3          @ Re: 1*3 - 2*4 = -5
+    smuadx  r1, r2, r3          @ Im: 1*4 + 2*3 = 10
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. SMUSD seeds the real-axis result; SMUADX seeds the imaginary-axis result.
+2. From here you can switch to SMLSD/SMLADX to *accumulate* further complex products — useful for Goertzel filters or single-bin DFT taps.
+3. Two-instruction complex multiply is the reason a Q15 FFT on Cortex-M33 runs at audio rates while an M0+ would struggle — for a 256-point FFT it saves roughly ~3 000 cycles.
 
 ## See also
 

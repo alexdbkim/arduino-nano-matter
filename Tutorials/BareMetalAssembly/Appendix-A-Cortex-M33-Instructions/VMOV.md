@@ -21,6 +21,8 @@ VMOV     <Dm>, <Rt>, <Rt2>       @ form 5a: two cores -> one D reg (Rt=low half)
 VMOV     <Rt>, <Rt2>, <Dm>       @ form 5b: one D reg -> two cores
 ```
 
+**When you'd actually use this** — VMOV is the multi-tool of FPU data movement: copy an FPU register to another, drop a small immediate constant straight into a register (`vmov.f32 s0, #1.0`), or shuttle a 32/64-bit value between core and FPU without going through memory. The core↔FPU forms are essential when you need to print a float (extract the bit pattern into a GPR for the printf path) or feed an integer-encoded value into a float register without an int→float convert. Note: VMOV moves *bits*, never converts — for that you want VCVT.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -73,6 +75,8 @@ All VMOV forms are 32-bit Thumb-2 only — there is no 16-bit encoding.
 
 ## Example
 
+### Example 1 — all five forms in one walk
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -104,6 +108,35 @@ loop:
 5. `vmov s4, s5, r0, r1` — paired transfer: `S4 ← R0`, `S5 ← R1` in one instruction.
 6. `vmov d3, r0, r1` — same 64 bits, but addressed as the double-word alias `D3`. `R0` is the *low* word. This is the part that bites people: `Rt` is low, `Rt2` is high, regardless of endianness of memory.
 7. `vmov r2, r3, d3` — reads it back out.
+
+### Example 2 — extract a float result into R0 for the AAPCS soft-float return path
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VMOV demo 2: compute a float result, then ship its bit pattern via R0 (soft-float ABI).
+    vmov.f32 s0, #2.0
+    vmov.f32 s1, #3.0
+    vadd.f32 s0, s0, s1           @ S0 = 5.0
+    vmov     r0, s0               @ R0 = bit pattern of 5.0 (0x40A00000)
+    vmov.f32 s2, #1.0
+    vmov     s3, r0               @ S3 <- raw bits back into FPU (no int->float convert)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `vadd.f32 s0, s0, s1` — produce a real float result (`5.0f`).
+2. `vmov r0, s0` — copy the **32 bits** of `S0` into `R0`. `R0` now contains the IEEE-754 encoding `0x40A00000`. This is exactly how the soft-float ABI (`-mfloat-abi=soft`) returns a `float`: in `R0`. With `-mfloat-abi=hard` the float would already be in `S0` and no VMOV is needed.
+3. `vmov s3, r0` — round trip back. Critically this is **not** an int→float conversion; the bits are preserved verbatim. If you wanted to *convert* (e.g. `int 5` → `5.0f`), you'd need `VCVT.F32.S32`.
+4. `loop: b loop` — park.
 
 ## See also
 

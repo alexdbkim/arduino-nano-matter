@@ -16,6 +16,8 @@ STLH  <Rt>, [<Rn>]
 
 Half-word release-store. Symmetric to [`LDAH`](LDAH.md). Stores `R[t]<15:0>` with release ordering.
 
+**When you'd actually use this** a producer publishes via a 16-bit field — most often a sequence number or version counter that gates a larger payload. `STLH` writes the half-word with release semantics so that a reader doing `LDAH` of the version is guaranteed to see all prior data writes. The 16-bit width is preferred when the version lives in a small RAM block or shares a cache line with its data. Without `STLH`, the publish-before-data reordering hazard is identical to the 32-bit case — except now you'd need `DMB ISHST` plus `STRH`.
+
 ## Operands
 
 | Field  | Type            | Constraints                          |
@@ -53,6 +55,8 @@ MemA_with_release[address, 2] = R[t]<15:0>;
 
 ## Example
 
+### Example 1 — Publish a 16-bit sequence
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -84,6 +88,39 @@ seq:
 1. `str r2, [r1]` — write the protected data with a plain store.
 2. `stlh r3, [r0]` — bump the 16-bit sequence number using release. A reader doing `LDAH` and seeing the new seq is guaranteed to also see the data write.
 3. This is the part that bites people: `STLH` traps on odd addresses regardless of `CCR.UNALIGN_TRP` — the trick of "set UNALIGN_TRP=0 to allow misaligned" only applies to plain `STRH`, not the release/acquire family.
+
+### Example 2 — Release a 16-bit error code
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Worker fills an error context, then publishes a 16-bit error code.
+    ldr     r0, =err_code
+    ldr     r1, =err_ctx
+    movw    r2, #0xDEAD
+    str     r2, [r1, #0]            @ context word
+    movw    r3, #0x0042             @ ERR_FAULT = 0x42
+    stlh    r3, [r0]                @ release-publish error code
+loop:
+    b       loop
+
+    .data
+    .align  2
+err_ctx:
+    .word   0
+err_code:
+    .hword  0
+```
+
+**Walkthrough:**
+
+1. `STR` populates the error context — readers cannot interpret it yet because `err_code` is still 0.
+2. `STLH` publishes the 16-bit error code with release ordering. A handler doing `LDAH err_code` and seeing non-zero is guaranteed to also see the context write.
+3. `STLH` traps on odd addresses regardless of `CCR.UNALIGN_TRP` — `.align 2` ensures the half-word is at an even address.
 
 ## See also
 

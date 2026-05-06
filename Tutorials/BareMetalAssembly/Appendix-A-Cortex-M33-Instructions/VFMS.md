@@ -18,6 +18,8 @@ VFMS.F32 <Sd>, <Sn>, <Sm>      @ Sd = Sd + (-Sn * Sm)   [single rounding]
 
 i.e. `Sd = Sd - Sn*Sm`, but with one round, not two.
 
+**When you'd actually use this** — residual computations and IIR feedback paths where you must subtract a product from a running value with as little round-off as possible. Typical homes: iterative refinement (`r = b - A*x`), the feedback term of a Direct-Form-I IIR (`acc -= a1*y_prev`), Kalman innovation updates, and any control-loop error term that gets fed back into the next sample. The fused single-round subtract preserves the cancelling bits that two-round `VMLS` can lose entirely when the operands are close in magnitude. Reach for `VFMS` whenever you write `acc -= prod` in a numerical inner loop and care about long-term drift.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -53,6 +55,8 @@ APSR untouched.
 
 ## Example
 
+### Example 1 — regression residual `r = y - x*beta`
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -72,6 +76,28 @@ loop:
 **Walkthrough:**
 
 1. `vfms.f32 s0, s1, s2` — full residual in one fused op. Critical for iterative refinement loops where round-off in the residual would defeat the iteration.
+
+### Example 2 — IIR Direct-Form-I feedback step
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  iir_step
+    .thumb_func
+iir_step:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ Feedback half of a biquad: acc = acc - a1 * y_prev
+    @ S0 = acc (already holds the feed-forward sum)
+    @ S1 = a1 (feedback coefficient), S2 = y_prev (last output)
+    vfms.f32 s0, s1, s2      @ acc -= a1 * y_prev   (single rounding)
+    bx      lr
+```
+
+**Walkthrough:**
+
+1. `vfms.f32 s0, s1, s2` — the IIR feedback path is the most error-sensitive part of a biquad, because today's rounded output becomes tomorrow's `y_prev`. With one rounding per step the pole locations stay close to design; with two roundings (`VMLS`) a high-Q biquad can drift over thousands of samples, audibly detuning the filter or in extreme cases turning a stable pole unstable.
 
 ## See also
 

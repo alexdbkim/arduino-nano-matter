@@ -18,6 +18,8 @@ TTA  <Rd>, <Rn>
 
 Same shape as `TT`; the **A** bit in the encoding asks the hardware to use the *other* security domain (which, since `TTA` only runs from Secure, means Non-secure) for the lookup.
 
+**When you'd actually use this:** `TTA` is what Secure code uses to evaluate a pointer **as if Non-secure code were the one accessing it**. On the Arduino Nano Matter, every Silicon Labs Secure-Library API that accepts a pointer from the Non-secure Matter or Bluetooth stack — output buffers for attestation signatures, key-blob handles, log scratch — runs that pointer through a `TTA`-based check before any store. The check rejects pointers that are Secure, NSC, or in unmapped space, so the eventual store can't be turned into a Secure-side write to memory the NS caller couldn't actually have reached. Without `TTA`, plain `TT` would tell you whether *Secure* code can touch the address (almost always yes), missing the question that actually matters: can the *Non-secure caller*? It is the bouncer that checks the *caller's* wristband, not its own.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -62,6 +64,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — Validating an NS RW pointer with TTA
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -104,6 +108,37 @@ loop:
 4. On success, `r0` flows through unchanged; on failure, return NULL.
 
 This is the part that bites people: a Non-secure caller that hands Secure code a pointer to its own NSC veneer table can pass a naive `TT` check (it's "accessible") yet still let the attacker observe Secure metadata. Use `TTA` and explicitly require bit 22 = 1 and bit 21 = 0 — i.e. plain Non-secure, not NSC.
+
+### Example 2 — TTA vetting an NS callback before BLXNS
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Illustrative — full use requires a CMSE-enabled toolchain build.
+    @ TTA demo 2: confirm a callback pointer is plain NS code, then call it.
+    @ r0 = candidate callback handed in by Non-secure code.
+    bic     r1, r0, #1          @ probe address without Thumb bit
+    tta     r2, r1              @ Non-secure-view attribution
+    lsrs    r3, r2, #22
+    ands    r3, r3, #1          @ bit 22: NS
+    beq     .Lbad
+    lsrs    r3, r2, #21
+    ands    r3, r3, #1          @ bit 21: NSC (must be 0 for plain NS code)
+    bne     .Lbad
+    bic     r0, r0, #1          @ ensure bit[0]=0 for state transition
+    blxns   r0                  @ call into Non-secure
+    b       loop
+.Lbad:
+    movs    r0, #0
+loop:
+    b       loop
+```
+
+**Walkthrough:** Same idea as a buffer check, but applied to **code pointers** the Non-secure side asked us to call. The two `TST`-shaped bit checks demand "yes, NS" and "no, not NSC"; this is what stops an attacker from ricocheting a `BLXNS` into a half-entered secure veneer (skipping its own `SG`-anchored prologue). After validation we do the standard `BIC` of bit 0 and finally `BLXNS`. Plain `TT` would have answered from the *Secure* perspective and missed the NS-specific MPU constraints — `TTA` is what makes the answer match the eventual access.
 
 ## See also
 

@@ -14,6 +14,8 @@
 QADD16 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `QADD16` adds two pairs of signed 16-bit lanes in parallel and clamps each independently. The classic case is a stereo audio mix-down: `L:R` packed into one register, another `L:R` into a second, one `qadd16` and you've mixed both channels with overflow protection in a single cycle. Also useful for pairwise sensor-channel sums (e.g. two 16-bit ADC readings packed together) or for the ±32767-clamped accumulator inside a fixed-point IIR. Without `QADD16` you'd `SXTH` each half, do two scalar `QADD`s, then re-pack with `PKHBT` — about 4–5 cycles instead of 1.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-halfword signed saturating add
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,33 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `qadd16 r0, r1, r2` treats each register as 2 packed halfword lanes and added them lane-by-lane.
 3. Each lane is then **saturated** to the signed `16`-bit range — no wrap-around, but `APSR.Q` is **not** updated.
+
+### Example 2 — stereo audio sample-pair mix-down
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Mix two stereo audio frames packed as L:R signed 16-bit halves.
+    @ r0 = frame A: hi=L_A=+12000, lo=R_A=-8000
+    @ r1 = frame B: hi=L_B=+25000, lo=R_B=+9000
+    movw    r0, #0xE0C0         @ R_A = -8000 = 0xE0C0
+    movt    r0, #0x2EE0         @ L_A = +12000 = 0x2EE0
+    movw    r1, #0x2328         @ R_B = +9000 = 0x2328
+    movt    r1, #0x61A8         @ L_B = +25000 = 0x61A8
+    qadd16  r2, r0, r1          @ L_out = sat(L_A+L_B), R_out = sat(R_A+R_B)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. Each register holds a complete stereo frame: high halfword is the left channel, low halfword is the right channel.
+2. `qadd16` performs both signed 16-bit additions in parallel; here the left lane (`12000 + 25000 = 37000`) saturates to `+32767`, while the right lane (`−8000 + 9000 = +1000`) passes through cleanly.
+3. The single instruction replaces what would otherwise be a `SXTH`-pair, two scalar `QADD`s, and a `PKHBT` to repack — about 5 cycles versus 1.
 
 ## See also
 

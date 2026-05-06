@@ -14,6 +14,8 @@
 CBNZ   <Rn>, <label>
 ```
 
+**When you'd actually use this**: `CBNZ` collapses the very common `CMP Rn,#0; BNE label` pair into a single 16-bit instruction without disturbing flags — exactly what compilers want for non-null-handle guards, "did we find a hit?" branches after a search, and end-of-loop probes that mustn't clobber `Z`/`N`/`C`/`V`. Two restrictions bite: it's forward-only (you cannot use it to close a backward loop), and the immediate is 0–126 bytes, so a careless refactor can put your label out of reach. When that happens the assembler complains and you fall back to `cmp`/`bne`.
+
 `CBNZ` is the mirror of `CBZ`: branch **forward** to `<label>` iff `<Rn>` is non-zero. Same restrictions apply:
 
 - forward-only (range 0–126 bytes from the current PC);
@@ -55,6 +57,8 @@ if Rn != 0 then
 
 ## Example
 
+### Example 1 — skip error path on valid handle
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -88,6 +92,32 @@ use_handle:
 5. `bx lr` — return from the happy path.
 
 The whole guard collapses into one 16-bit instruction. A `cmp r0, #0` + `bne .Lvalid` would do the same, but two instructions and would clobber `Z`, `N`, `C`, `V`.
+
+### Example 2 — branchless flag select
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #5          @ pretend "count"
+    cbnz    r0, .Lnonzero   @ forward jump when r0 != 0
+    movs    r1, #0          @ count was zero
+    b       loop
+.Lnonzero:
+    movs    r1, #1          @ count was non-zero
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `cbnz r0, .Lnonzero` — single-instruction test-and-skip. APSR untouched.
+2. `movs r1, #0` — runs only when `r0` was zero.
+3. `.Lnonzero: movs r1, #1` — runs only when `r0` was non-zero.
+4. The whole thing is one 16-bit `CBNZ` plus two `MOVS` — three halfwords total versus four for the `cmp`/`bne` equivalent.
 
 ## See also
 

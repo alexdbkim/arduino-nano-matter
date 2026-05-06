@@ -16,6 +16,8 @@ MLA{<cond>} <Rd>, <Rn>, <Rm>, <Ra>
 
 Low 32 bits of `Ra + Rn*Rm`. Four register operands, all distinct in the encoding (though they can be the same physical register).
 
+**When you'd actually use this**: MLA fuses `acc += a*b` into one cycle, so it's the natural hot-loop instruction for FIR filters, IIR biquads, dot products, Horner-form polynomial evaluation, and bilinear interpolation in graphics. Without it you'd pay two instructions (`MUL` + `ADD`) per tap *and* burn an extra register — over a 32-tap filter that's a real cycle budget. There is no `MLAS`, so if you need flags afterwards do a `cmp Rd, #0`. Use plain MUL for the very first tap when the accumulator hasn't been initialised yet — accumulating into garbage is the easy way to get "random" filter output.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -60,6 +62,8 @@ Never. There is no `MLAS`. If you need flags, follow with `cmp Rd, #0` or simila
 
 ## Example
 
+### Example 1 — 2-element dot product
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -83,6 +87,34 @@ loop:
 
 1. `mul r4, r0, r1` — start the running sum with the first product.
 2. `mla r4, r2, r3, r4` — fuses "multiply and add" into one cycle: compute `r2*r3`, add it to `r4`, store back into `r4`. This is the bread and butter of FIR filters and DSP loops.
+
+### Example 2 — 3-tap unrolled FIR-style accumulator
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #10             @ sample s0
+    movs    r1, #2              @ tap c0
+    mul     r4, r0, r1          @ acc = s0*c0 = 20  (first tap uses MUL)
+    movs    r0, #20             @ s1
+    movs    r1, #3              @ c1
+    mla     r4, r0, r1, r4      @ acc += s1*c1 -> 80
+    movs    r0, #30             @ s2
+    movs    r1, #4              @ c2
+    mla     r4, r0, r1, r4      @ acc += s2*c2 -> 200
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. The first tap uses plain `MUL` because the accumulator hasn't been initialised yet — using `MLA` here would add into garbage.
+2. Each subsequent tap is a single `MLA` cycle: multiply, add, store back into the same register. This is the inner-loop shape used by every textbook FIR on Cortex-M.
+3. There is no flag-setting variant, so loops typically use a separate `subs` on the index register to decide when to stop.
 
 ## See also
 

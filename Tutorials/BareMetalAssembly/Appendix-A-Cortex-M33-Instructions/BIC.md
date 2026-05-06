@@ -17,6 +17,8 @@ BIC{S}{<cond>} {<Rd>,} <Rn>, #<const>
 
 `Rd = Rn AND (NOT operand2)`. Bits set in operand2 are **cleared** in `Rn`.
 
+**When you'd actually use this** is the **clear-bits half** of read-modify-write on peripheral registers. To turn off a single feature bit without disturbing its siblings: `ldr r1, [r0]; bic r1, r1, #FEATURE; str r1, [r0]`. It pairs with `ORR` for the classic "clear the field, set the new value" idiom on multi-bit fields like clock dividers or pin modes. Doing the same with `AND #~MASK` works in theory but the inverted constant often doesn't fit as a Thumb-2 modified immediate, so `BIC #MASK` is both shorter and more readable.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -63,6 +65,8 @@ if ConditionPassed() then
 
 ## Example
 
+### Example 1 — clearing fields in a register
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -85,6 +89,27 @@ loop:
 1. `bic r1, r0, #0xFF` — the typical "clear bits 7:0" pattern. Compare to `and r1, r0, #~0xFF` — same effect, but `BIC` reads more naturally and lets you state which bits you *want gone*.
 2. `bic r2, r1, #0x000F0000` — chain another mask to scrub another field.
 3. `bics ...` — clears bit 31 and updates flags, so a following `BPL`/`BMI` can branch on the new MSB.
+
+### Example 2 — update a 2-bit MODE field
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ MODE field at bits [5:4] of a config register; change it to 0b10.
+    ldr     r1, =0x40000004        @ pretend peripheral CONFIG register addr
+    ldr     r0, [r1]
+    bic     r0, r0, #(3 << 4)      @ clear bits [5:4]
+    orr     r0, r0, #(2 << 4)      @ set bits [5:4] to 0b10
+    str     r0, [r1]
+loop:
+    b   loop
+```
+
+**Walkthrough:** `BIC` clears the 2-bit field with the mask `0x30`; `ORR` drops the new value `0b10` into the same slot. The `AND`-equivalent would need the constant `0xFFFFFFCF`, which isn't a Thumb-2 modified immediate — so the assembler would emit a literal-pool load. `BIC #0x30` keeps it to one 32-bit instruction.
 
 ## See also
 

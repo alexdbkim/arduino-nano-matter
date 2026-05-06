@@ -15,6 +15,9 @@ VCVTP.S32.F32   <Sd>, <Sm>
 VCVTP.U32.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you need `(int)ceilf(x)` in one instruction. The mnemonic: **P = Plus-infinity = ceiling** — always rounds *up* the number line, so 2.1→3 and −2.9→−2 (toward zero for negatives). Typical contexts: `ceil(samples / buffer_size)` for "how many buffers do I need to hold N samples?", conservative cap-at-ceiling in resource sizing, and any allocation count where rounding down would under-provision. Without it you'd compute `-VCVTM(-x)` or branch on the fractional part — many cycles per ceil instead of one opcode.
+
+
 Unconditional. Equivalent to `(int)ceilf(x)`.
 
 ## Operands
@@ -56,6 +59,9 @@ Independent of `FPSCR.RMode`.
 
 ## Example
 
+
+### Example 1 — round UP (toward +∞)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -85,6 +91,29 @@ loop:
 3. `vcvtp.s32.f32 s5,s4` — exactly representable integer is unchanged; `IXC` not set.
 
 This is `ceilf` in one instruction, no library call, no FPSCR fiddling.
+
+### Example 2 — ceil(samples / buffer_size) for buffer count
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  buffers_needed
+    .thumb_func
+buffers_needed:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ s0 = (float)total_samples / (float)buffer_size
+    vcvtp.s32.f32 s1, s0          @ s1 = ceilf(s0)  (always rounds up)
+    vmov          r0, s1
+    bx            lr
+```
+
+**Walkthrough:**
+
+1. The caller computes `total_samples / buffer_size` in float — for 1000/256 = 3.906… we'd under-allocate if we truncated.
+2. `vcvtp.s32.f32 s1,s0` rounds 3.906 up to 4, the actual number of buffers needed.
+3. For negative inputs `VCVTP` rounds toward zero (−2.9 → −2), which is the IEEE-754 ceiling — almost never what allocation code wants, so clamp `s0 ≥ 0` first.
 
 ## See also
 

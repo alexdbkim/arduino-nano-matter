@@ -14,6 +14,8 @@
 MOVT  <Rd>, #<imm16>
 ```
 
+**When you'd actually use this** is the second half of building a 32-bit constant inline — `MOVW Rd, #lo16` then `MOVT Rd, #hi16`. Two 32-bit Thumb instructions, no literal pool, no indirect memory access. Compilers emit this exact pair for absolute peripheral addresses on M-profile (e.g., loading `0xE000ED08` to touch `SCB->VTOR`). The alternative `LDR Rd, =const` works for any value but burns a 4-byte word in the pool plus an indirect load — `MOVT`/`MOVW` keeps the constant inline and predictable.
+
 Writes `imm16` to bits [31:16] of `<Rd>` and **preserves** bits [15:0]. The standard pair with [`MOVW`](MOVW.md) for 32-bit constants.
 
 ## Operands
@@ -52,6 +54,8 @@ No flag-setting form exists.
 
 ## Example
 
+### Example 1 — Build a 32-bit address one half at a time
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,30 @@ loop:
 2. `movt r0, #0xABCD` — writes the top half *without* disturbing 0x1234. R0 is now 0xABCD1234.
 3. `movw r1, #0x0001` / `movt r1, #0xFFFF` — proves MOVT does not zero the low half (compare with `MOVW`, which always zeros the high half). This is the part that bites people: doing two `MOVW`s and expecting a 32-bit value will **not** work.
 4. `movw r2, #0xED08` / `movt r2, #0xE000` — canonical pattern for getting a peripheral or SCB address into a register.
+
+### Example 2 — Build peripheral base 0x40000000 and poke it
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movw    r0, #0x0000         @ low half  -> r0 = 0x00000000
+    movt    r0, #0x4000         @ high half -> r0 = 0x40000000
+    movs    r1, #1
+    str     r1, [r0]            @ first write to the peripheral base
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `movw r0, #0x0000` — writes the low half and zeros the high half.
+2. `movt r0, #0x4000` — overlays the top half; r0 now holds 0x40000000 exactly.
+3. `str r1, [r0]` — typical first MMIO write. No literal pool was touched, so the linker doesn't need to place a `.word` near this code.
+4. Total cost: two 32-bit Thumb instructions (8 bytes) — the same as the literal-pool approach but without the indirect load.
 
 ## See also
 

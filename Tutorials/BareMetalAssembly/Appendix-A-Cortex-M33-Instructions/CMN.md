@@ -17,6 +17,8 @@ CMN{<cond>} <Rn>, #<const>
 
 `CMN Rn, op2` is `ADDS` with the result discarded. Equivalent in flag-effect to `CMP Rn, -op2` — handy for comparing against small negative values that wouldn't fit as a `CMP` immediate.
 
+**When you'd actually use this** is **comparing against a small negative immediate** — `cmn r0, #1` answers "is r0 == -1?" in one instruction, while `cmp r0, #-1` would have to materialise `0xFFFFFFFF` into a scratch register first. It's also handy when you've already negated an offset and want to compare without a separate `RSB`. In hand-written code it's rare, but compilers reach for it whenever a comparison constant is small and negative.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -64,6 +66,8 @@ Always.
 
 ## Example
 
+### Example 1 — compare against a small negative
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -89,6 +93,27 @@ loop:
 2. The second `cmn` is a pure flag-setter: gives you N/Z/C/V as if you had executed `ADDS rX, r1, #3`, but no register is clobbered.
 
 This is the part that bites people: the **C flag of `CMN` is opposite-sense to the C flag of `CMP`**. After `CMN` C means "addition overflowed unsigned", whereas after `CMP` C means "no borrow". Don't blindly translate `BCS` between them.
+
+### Example 2 — test for the −1 sentinel
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ A linked-list "next" index of -1 means "end of list".
+    mov     r0, #-1                @ pretend we just dequeued the sentinel
+    cmn     r0, #1                 @ r0 + 1 == 0  =>  Z=1 iff r0 == -1
+    beq     end_of_list
+    @ ... process index ...
+end_of_list:
+loop:
+    b   loop
+```
+
+**Walkthrough:** `CMN r0, #1` sets Z when `r0 + 1 == 0`, i.e. when `r0 == -1`. Doing the same with `CMP` would need `mov r1, #-1; cmp r0, r1` — two instructions and a scratch register — because `-1` doesn't fit as a `CMP` immediate.
 
 ## See also
 

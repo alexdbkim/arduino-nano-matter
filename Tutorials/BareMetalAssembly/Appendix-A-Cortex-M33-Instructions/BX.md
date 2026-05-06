@@ -14,6 +14,8 @@
 BX   <Rm>
 ```
 
+**When you'd actually use this**: `BX` is the canonical way to **return** from a subroutine on Cortex-M (`bx lr`). It's also how you tail-jump through a function pointer when you don't need `LR` saved, and how exception handlers return — except there the magic `EXC_RETURN` value in `LR` is consumed by the hardware to unwind the exception frame instead of branching to ordinary code. Without `BX`, you'd be tempted to write `MOV PC, LR`, but that doesn't update the Thumb-state bit and would crash on Cortex-M. The `Rm[0] == 1` rule is the same trap as `BLX`.
+
 `BX` jumps to the address in `<Rm>`. The low bit of `<Rm>` selects the instruction-set state that the core enters: `1` = Thumb, `0` = ARM (A32). **Cortex-M33 only implements Thumb**, so the LSB *must* be `1`. If it isn't, you take a `UsageFault` with `INVSTATE` set the moment you try to execute the target instruction.
 
 This is the part that bites people most often when:
@@ -58,6 +60,8 @@ if EPSR.T == 0 then UsageFault(INVSTATE)
 
 ## Example
 
+### Example 1 — BX LR return + BLX indirect call
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -88,6 +92,34 @@ add_one:
 2. `bx lr` inside `add_one` reads `LR`, masks bit 0 off to form the PC, and uses bit 0 to confirm Thumb state — return.
 3. `ldr r1, =add_one` — the `=symbol` form makes the assembler emit the value the linker fixes up, *with* bit 0 already set.
 4. `blx r1` — calls through the register. If you'd hand-built `r1` with `ldr r1, =add_one` then `bics r1, #1`, this `blx`/`bx` would fault.
+
+### Example 2 — tail-jump through a register
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #5
+    ldr     r2, =plus_one
+    bx      r2              @ tail-jump; LR is whatever the caller set
+    @ never reached: plus_one's bx lr returns to caller of reset_handler
+loop:
+    b       loop
+
+    .thumb_func
+plus_one:
+    adds    r0, r0, #1
+    bx      lr
+```
+
+**Walkthrough:**
+
+1. `ldr r2, =plus_one` — Thumb bit set by the `.thumb_func` directive.
+2. `bx r2` — jump (no link) to `plus_one`. `LR` is unchanged, so when `plus_one` returns it returns to *our* caller — the textbook tail-call pattern compilers use to save a stack frame.
+3. `bx lr` inside `plus_one` reads the unchanged `LR`, masks bit 0 to form the PC, and returns. Note that `loop` is never reached in this contrived setup — `bx r2` already left.
 
 ## See also
 

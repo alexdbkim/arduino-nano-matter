@@ -14,6 +14,8 @@
 ADR{<cond>} <Rd>, <label>
 ```
 
+**When you'd actually use this** lets you grab the runtime address of a nearby label without spending a literal-pool word. Hand-written code reaches for it when populating a small jump table, fetching a `.word`/`.byte` constant out of `.text`, or pointing at a string sitting in flash. The Cortex-M boot files use it to load addresses for vector-table fix-ups before the linker symbols are otherwise reachable. The alternative — `LDR Rd, =label` — costs an extra word in the literal pool and an indirect memory load, so `ADR` is strictly cheaper when the label is in range.
+
 Compute the address of `<label>` (relative to the PC) and put it in `<Rd>`. There is no `ADR` opcode in the machine: the assembler picks one of `ADD Rd, PC, #imm` or `SUB Rd, PC, #imm` depending on whether the label is ahead of or behind the current PC.
 
 `ADR` is the canonical way to take the address of a nearby code label, jump table, or `.byte`/`.word` literal embedded in `.text`. For *far* targets or RAM addresses, use `LDR Rd, =symbol` instead, which expands to a literal-pool load.
@@ -71,6 +73,8 @@ The disassembler typically shows `ADD Rd, PC, ...` or `SUB Rd, PC, ...`, not `AD
 
 ## Example
 
+### Example 1 — Forward jump table and string
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -99,6 +103,42 @@ loop:
 1. `adr r0, message` — assembles to a forward `ADD Rd, PC, #imm`. The result is the runtime address of `message`, no matter where the linker places the section.
 2. `adr r1, jtab` followed by `ldr r2, [r1]` — the standard "PC-relative table" pattern. Because `jtab` words include the Thumb bit (`+ 1`), `r2` is directly callable with `BLX r2`.
 3. `.balign 4` before `jtab` is essential: PC is word-aligned during the `ADR`, so the label must be too, or you'll fetch the wrong word.
+
+### Example 2 — Tiny indexed dispatch table
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #1                  @ pretend this came from a switch
+    adr     r1, dispatch
+    ldr     r2, [r1, r0, lsl #2]    @ r2 = dispatch[r0]
+    blx     r2                      @ call the chosen handler
+loop:
+    b   loop
+
+    .balign 4
+dispatch:
+    .word   handler_a + 1           @ Thumb bit set so BLX works
+    .word   handler_b + 1
+
+    .thumb_func
+handler_a:
+    bx  lr
+    .thumb_func
+handler_b:
+    bx  lr
+```
+
+**Walkthrough:**
+
+1. `adr r1, dispatch` — PC-relative address of the table; the compiler doesn't need to know where the linker placed it.
+2. `ldr r2, [r1, r0, lsl #2]` — scaled indexed load: each entry is 4 bytes, so shift the index left by 2.
+3. `blx r2` — indirect call into the chosen function. Because the table words include the Thumb bit, no fix-up is needed.
+4. No literal-pool word was emitted — the whole dispatch lives inline in `.text`.
 
 ## See also
 

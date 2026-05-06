@@ -18,6 +18,8 @@ TTT  <Rd>, <Rn>
 
 Same shape as `TT`. The encoding sets the **T** bit so the MPU lookup uses unprivileged permissions.
 
+**When you'd actually use this:** `TTT` is `TT` with the **T-flag** asserted, so the MPU permissions reported in the result reflect what an *unprivileged* thread could do — even when the probing code is privileged. On the Arduino Nano Matter this matters whenever a privileged Secure handler (an SVC dispatcher inside the Silicon Labs Secure Library, say) is validating a pointer on behalf of an unprivileged Secure thread, or — paired with the **A-flag** as `TTAT` — on behalf of unprivileged Non-secure code. Plain `TT` would lie: it would say "yes, accessible" based on the validator's own privilege, then the real access from the unprivileged caller would fault. `TTT` makes the validator honest, and its result word also carries the readability/Thumb-bit information you need before an indirect call to a candidate function pointer.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -60,6 +62,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — Range check for an unprivileged caller's buffer
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -97,6 +101,33 @@ loop:
 5. `it eq` / `moveq r0, #1` — set the boolean return.
 
 This is the part that bites people: privileged Secure code that uses plain [TT](TT.md) here will get a "yes, accessible" answer based on its *own* privilege, then later the actual access from the unprivileged thread faults. `TTT` is what makes the validator honest.
+
+### Example 2 — TTT vetting an indirect-call target
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Illustrative — full use requires a CMSE-enabled toolchain build.
+    @ TTT demo 2: vet a code pointer for an unprivileged caller before BLX.
+    @ r0 = candidate function pointer (Thumb bit set as usual).
+    bic     r1, r0, #1          @ probe address without the T-bit
+    ttt     r2, r1              @ unprivileged-view attribution
+    lsrs    r3, r2, #23
+    ands    r3, r3, #1          @ bit 23: readable from current state (unpriv)
+    beq     .Lreject
+    blx     r0                  @ ok: indirect call (Thumb bit preserved in r0)
+    b       loop
+.Lreject:
+    movs    r0, #0
+loop:
+    b       loop
+```
+
+**Walkthrough:** A privileged Secure dispatcher receives a function pointer that an *unprivileged* thread asked it to call. We strip the Thumb bit before probing (the SAU/MPU don't care about T), then `ttt` reports what the unprivileged thread itself would see. If the location isn't readable from unprivileged state we refuse; otherwise the original `r0` (with its Thumb bit intact) feeds straight into `blx`. Plain `TT` here would happily greenlight memory only the privileged dispatcher can reach, then `BLX` would fault when actually executing — `TTT` keeps the validator and the eventual access in agreement.
 
 ## See also
 

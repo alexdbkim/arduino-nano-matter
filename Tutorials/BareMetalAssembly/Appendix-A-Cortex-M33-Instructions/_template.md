@@ -26,6 +26,8 @@ This file is documentation for contributors. It is NOT loaded by anything.
 {{MNEMONIC}}{{S}}{{<cond>}} {{<Rd>,}} <Rn>, <operand2>
 ```
 
+{{**When you'd actually use this** — a 2–5 sentence prose paragraph, specific to this mnemonic, that names the kinds of real Cortex-M33 firmware code where this instruction appears (e.g. "the inner loop of an FIR filter", "loading a peripheral status register from MMIO", "the saturating accumulator in an audio mixer", "the gateway-entry probe in a TrustZone secure-callable", "RTOS context-switch register save", "compilers emit this for `volatile` reads"). Mention what alternative would be worse and why — this is the part that makes a learner appreciate the instruction.}}
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -63,6 +65,8 @@ if ConditionPassed() then
 
 ## Example
 
+### Example 1 — {{one-line label of basic shape, e.g. "the simplest legal use"}}
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -80,6 +84,28 @@ loop:
 
 1. `{{first instruction}}` — what it does and what it leaves in which register / flag.
 2. `{{second instruction}}` — ...
+
+### Example 2 — {{one-line label of an idiomatic use, e.g. "inside a polling loop", "DSP filter tap", "RTOS context save", "atomic CAS retry", "MMIO status read"}}
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ {{MNEMONIC}} demo 2: {{one-line description of a different, idiomatic use}}
+    {{a different real-world pattern, 4–10 lines}}
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `{{first instruction}}` — ...
+2. `{{second instruction}}` — ...
+
+> Both examples assemble standalone with `arm-none-eabi-as -mcpu=cortex-m33 -mthumb`. FPU files additionally need `.fpu fpv5-sp-d16` and `-mfpu=fpv5-sp-d16 -mfloat-abi=hard`. TrustZone files mark themselves illustrative (CMSE toolchain required for full use).
 
 ## See also
 

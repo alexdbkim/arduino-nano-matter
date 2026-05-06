@@ -19,6 +19,8 @@ LDRD{<cond>}  <Rt>, <Rt2>, <label>              @ PC-relative
 
 `<Rt>` ← `MemU[addr, 4]`, `<Rt2>` ← `MemU[addr+4, 4]`. Useful for 64-bit loads, pairs of pointers, or context save/restore.
 
+**When you'd actually use this.** `LDRD` is the natural fit for anything that's logically a 64-bit value or an adjacent pair of 32-bit fields: a `uint64_t` timestamp from a 64-bit cycle/RTC counter, the `{lo, hi}` halves of a 64-bit hardware timer, or two pointers stored side-by-side in a descriptor. One 32-bit instruction loads both words; without it you'd write two `LDR`s, costing more code bytes and an extra decode. The alignment requirement is strict — *any* misaligned `LDRD` faults regardless of `CCR.UNALIGN_TRP` — so it's only safe on values you've placed at word-aligned addresses (which the C ABI already guarantees for `uint64_t`).
+
 ## Operands
 
 | Field    | Type                | Constraints                                                              |
@@ -64,6 +66,8 @@ No 16-bit form. Always emits a 32-bit instruction.
 
 ## Example
 
+### Example 1 — loading a 64-bit struct as a register pair
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -91,6 +95,35 @@ u64_value:
 1. `ldrd r2, r3, [r0]` — single instruction loads two consecutive words; on most M-class implementations this is two bus transfers but a single decoded op.
 2. `ldrd r4, r5, [r0, #8]` — fetches the second 8-byte pair without disturbing R0.
 3. `ldrd r6, r7, [r0], #16` — post-indexed: handy for streaming through a buffer of paired words. This is the part that bites people: `<Rt>`, `<Rt2>`, and `<Rn>` (with writeback) must all be distinct registers, otherwise the encoding is UNPREDICTABLE.
+
+### Example 2 — atomic-enough 64-bit counter read with rollover retry
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ LDRD demo 2: read a 64-bit cycle counter as a {lo, hi} pair with hi-rollover check.
+    ldr     r0, =cycle_counter      @ &counter (8-byte aligned)
+retry:
+    ldrd    r2, r3, [r0]            @ r2 = lo, r3 = hi
+    ldrd    r4, r5, [r0]            @ re-read
+    cmp     r5, r3                  @ did hi change between the two reads?
+    bne     retry                   @ if so, retry
+loop:
+    b       loop
+
+    .align  3
+cycle_counter:
+    .word   0xDEADBEEF, 0x00000001
+```
+
+**Walkthrough:**
+
+1. `ldrd r2, r3, [r0]` — load *lo* into R2 and *hi* into R3 in a single instruction; the address `r0` must be word-aligned or a UsageFault fires.
+2. `ldrd r4, r5, [r0]` followed by `cmp r5, r3` / `bne retry` — classic "read hi, lo, then re-read hi to detect rollover" trick for 64-bit counters that aren't atomic across two 32-bit MMIO accesses. If `hi` is unchanged on the second read, the `lo` we captured first is consistent with it.
 
 ## See also
 

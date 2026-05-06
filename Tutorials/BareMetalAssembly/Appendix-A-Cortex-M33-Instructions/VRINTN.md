@@ -14,6 +14,9 @@
 VRINTN.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you need the IEEE-754 default round-to-nearest-even of a float kept as a float, because the next operation in the chain is also float. Same **N = Nearest, ties to eveN** mnemonic as [VCVTN](VCVTN.md). Typical context: bias-free quantisation in a DSP pipeline where the rounded value feeds another multiply/add, or histogram binning that will be re-divided in float later. Without it you'd round-trip through int (`VCVTN` then `VCVT.F32.S32`) — wasted cycles and a possible saturation for very large inputs.
+
+
 Unconditional. IEEE-754 default rounding, result kept as F32.
 
 ## Operands
@@ -54,6 +57,9 @@ Independent of `FPSCR.RMode`.
 
 ## Example
 
+
+### Example 1 — ties resolve to the EVEN neighbour (float result)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -83,6 +89,30 @@ loop:
 This is the part that bites people: `VRINTN` follows `roundeven`, **not** the
 schoolbook "0.5 always rounds up" rule. If you actually want schoolbook rounding,
 use [VRINTA](VRINTA.md).
+
+### Example 2 — bias-free quantisation kept in float for downstream multiply
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  quantise_step
+    .thumb_func
+quantise_step:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ s0 = input, s1 = 1.0 / step_size, s2 = step_size
+    vmul.f32   s3, s0, s1         @ s3 = s0 / step_size
+    vrintn.f32 s3, s3             @ s3 = roundeven(s3)  (still float)
+    vmul.f32   s0, s3, s2         @ s0 = quantised value, in original units
+    bx         lr
+```
+
+**Walkthrough:**
+
+1. Multiply by `1/step` to map onto an integer grid.
+2. `vrintn.f32 s3,s3` rounds to the nearest grid point with banker's tie-breaking — symmetric noise won't accumulate a DC bias.
+3. Multiplying by `step_size` returns the value to original units; no integer round-trip means very large inputs don't saturate.
 
 ## See also
 

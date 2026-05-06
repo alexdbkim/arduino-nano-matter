@@ -15,6 +15,9 @@ VCVTA.S32.F32   <Sd>, <Sm>
 VCVTA.U32.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you want schoolbook "0.5 always rounds up in magnitude" without touching `FPSCR`. The mnemonic to memorise: **A = Away-from-zero on ties** — 2.5→3, −2.5→−3. Typical contexts are `lroundf`-style integer rounding for human-readable values, sensor counts displayed on a UI, and conservative event-counter buckets where you want the absolute value to round outward. Without `VCVTA` you'd compute `VCVT.S32.F32(x + copysignf(0.5f, x))` — a multi-instruction dance instead of one opcode.
+
+
 No `<cond>` — explicit-rounding `VCVT` flavours are unconditional.
 
 ## Operands
@@ -57,6 +60,9 @@ Independent of `FPSCR.RMode` — equivalent to C99 `lroundf()` semantics.
 
 ## Example
 
+
+### Example 1 — ties go away from zero
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +92,29 @@ loop:
 
 Use this when you need the schoolbook rounding rule: "0.5 always rounds up in
 magnitude". Compilers sometimes emit `VCVTA` for `lroundf()`.
+
+### Example 2 — lroundf-style sensor count for a UI display
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  sample_to_count
+    .thumb_func
+sample_to_count:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ s0 = filtered sensor sample in float "counts"
+    vcvta.s32.f32 s1, s0          @ s1 = lroundf(s0)  -- ties away from zero
+    vmov          r0, s1
+    bx            lr
+```
+
+**Walkthrough:**
+
+1. The filter delivers a non-integer count (e.g. 124.5) in `s0`.
+2. `vcvta.s32.f32 s1,s0` rounds with the schoolbook rule — 124.5 → 125, −0.5 → −1 — exactly what a human reading the UI expects.
+3. The integer drops into `r0` for return; no `FPSCR` programming required.
 
 ## See also
 

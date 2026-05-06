@@ -16,6 +16,8 @@ FPv5-SP only — `.F64` form unavailable. **There is no plain `VMAX` on Cortex-M
 VMAXNM.F32 <Sd>, <Sn>, <Sm>    @ Sd = maxNum(Sn, Sm)
 ```
 
+**When you'd actually use this** is for **NaN-safe lower-clamping or running-max tracking**. Picture a sensor that occasionally glitches and produces NaN: a plain `VCMP`+branch sequence would propagate the NaN through your output; `VMAXNM` quietly returns the non-NaN operand instead, so a clamp `min(reading, ceiling)` (paired with `VMINNM`) keeps producing sane outputs. There's deliberately no plain `VMAX` on Cortex-M33 scalar VFP — the IEEE-754-2008 *number*-max is the only choice, which is exactly what you want for robust real-time DSP. CPACR first: with the FPU disabled, even `VMAXNM` faults before it can save you from a NaN.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -58,6 +60,8 @@ APSR untouched. Signalling-NaN input sets `FPSCR.IOC`.
 
 ## Example
 
+### Example 1 — branch-free ReLU `max(x, 0.0)`
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -81,6 +85,32 @@ loop:
 
 1. `vsub.f32 s1, s1, s1` — produces exactly `+0.0` regardless of S1's prior value (well-defined for any finite/normal input; if S1 were NaN this would still give NaN, so initialise sensibly upstream). The literal `#0.0` is **not** an encodable VFP immediate, so this trick or a `vldr` from a literal pool is the standard workaround.
 2. `vmaxnm.f32 s2, s0, s1` — branch-free ReLU. NaN input yields `+0.0` — handy if upstream filtering may produce NaNs.
+
+### Example 2 — running peak-hold across three samples
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VMAXNM demo 2: peak-hold telemetry
+    @ S0 = running peak, S1..S3 = three new samples (S2 may legitimately be NaN)
+    vmaxnm.f32 s0, s0, s1    @ peak = max(peak, sample1)
+    vmaxnm.f32 s0, s0, s2    @ peak = max(peak, sample2)  -- NaN ignored
+    vmaxnm.f32 s0, s0, s3    @ peak = max(peak, sample3)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. Each `vmaxnm.f32` updates the running peak in one cycle. No branches, no `IT` block — the FPU does the comparison internally.
+2. Crucially, when `S2` is a quiet NaN (e.g. a sensor read flagged as invalid), `VMAXNM` returns the *other* operand (`peak`), so the peak is left unchanged instead of being permanently corrupted to NaN.
+3. The same pattern with `VCMP`+`vselgt`+`VMRS` would work but is longer and has to be fed `VMRS APSR_nzcv, fpscr` between each comparison — `VMAXNM` collapses all that into one instruction.
 
 ## See also
 

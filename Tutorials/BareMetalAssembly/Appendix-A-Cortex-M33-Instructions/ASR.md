@@ -17,6 +17,8 @@ ASR{S}{<cond>} {<Rd>,} <Rn>, <Rs>             @ register form
 
 Right-shift `Rm`/`Rn` by N bits, **replicating bit 31** (the sign bit) into the vacated high bits. The last bit shifted out lands in C with `S`.
 
+**When you'd actually use this** is **signed division by a power of two** — `asr r0, r0, #3` is `r0 / 8` for signed integers, which `LSR` would get wrong for negatives (it would zero-fill the sign bit and turn `-8` into a huge positive number). It's also the second half of fixed-point Q15.16 math: after a `SMULL` produces a 64-bit signed product, an `ASR` rescales the result back. Note that `ASR` rounds toward `-∞`, not toward zero — `(-1) >> 1 == -1`, not `0` — which is occasionally surprising but is exactly what compilers count on.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -65,6 +67,8 @@ Register form: `Rs<7:0> == 0` ⇒ C unchanged. `Rs >= 32` ⇒ result is `0` if o
 
 ## Example
 
+### Example 1 — signed shift basics
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -89,6 +93,28 @@ loop:
 3. `asrs r4, r0, r3` — register-form variant. `S` is on, so N reflects the (preserved) sign and you can branch on it.
 
 This is the part that bites people: ARM's `ASR` rounds **toward minus infinity** for negative inputs, not toward zero. `(-1) ASR 1 = -1`, not `0`. C compilers know this and emit corrections when language semantics demand truncation.
+
+### Example 2 — Q15.16 fixed-point multiply
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Multiply two Q15.16 fixed-point numbers; rescale result back to Q15.16.
+    ldr     r0, =0x00018000        @ 1.5 in Q15.16
+    ldr     r1, =0x00028000        @ 2.5 in Q15.16
+    smull   r2, r3, r0, r1         @ r3:r2 = signed 64-bit product (Q30.32)
+    lsr     r2, r2, #16            @ shift the low half right by 16
+    orr     r2, r2, r3, lsl #16    @ r2 = product in Q15.16 = 0x0003C000 (3.75)
+    asr     r3, r3, #16            @ r3 = sign-extended overflow word (0 or -1 if in range)
+loop:
+    b   loop
+```
+
+**Walkthrough:** `SMULL` produces a 64-bit signed product in `r3:r2`; the Q15.16 result lives in bits [47:16] of that pair. The `LSR`+`ORR` recombines those bits into `r2`, and the final `ASR r3, r3, #16` sign-extends the high word so a non-trivial value there flags overflow. Plain `LSR` on `r3` instead would silently lose the sign of negative results.
 
 ## See also
 

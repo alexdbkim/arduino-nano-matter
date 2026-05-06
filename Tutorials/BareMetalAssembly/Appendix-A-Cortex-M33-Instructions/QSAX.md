@@ -14,6 +14,8 @@
 QSAX <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `QSAX` is the mirror of `QASX`: lane layout is **top half of result = top half of `Rn` MINUS bottom half of `Rm`; bottom half of result = bottom half of `Rn` PLUS top half of `Rm`**. It's the partner instruction in complex multiplies (it produces the imaginary-output term while `QASX` produces the real-output term), and it's the second half of every radix-2 FFT butterfly. It's also the cleanest way to express "left+right on one lane, left−right on the other" mid-side stereo encoding when the channels are packed swapped. Without `QSAX`, the same lane shuffle costs 3–4 instructions and a manual saturate.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-halfword signed cross subtract/add
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,33 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `qsax r0, r1, r2` exchanges the halves of `r2` first, then computes `r0[hi] = r1[hi] − r2[lo]` and `r0[lo] = r1[lo] + r2[hi]`.
 3. Each half is then **saturated** to the signed 16-bit range `[−32768, 32767]`.
+
+### Example 2 — complex multiply imaginary-part cross step
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Mirror of QASX: hi = sat(Rn_hi - Rm_lo), lo = sat(Rn_lo + Rm_hi).
+    @ With Rn = a:b and Rm = c:d this captures (a-d) on top and (b+c) on
+    @ bottom -- the imaginary-output cross pattern of complex multiply.
+    movw    r0, #0x0064         @ b = +100
+    movt    r0, #0x012C         @ a = +300
+    movw    r1, #0x0032         @ d = +50
+    movt    r1, #0x00C8         @ c = +200
+    qsax    r2, r0, r1          @ hi = sat(a - d) = +250, lo = sat(b + c) = +300
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` is `a:b` (high:low), `r1` is `c:d`; `qsax` flips the operations relative to `qasx`.
+2. `qsax` computes `r2_hi = sat(300 − 50) = +250` and `r2_lo = sat(100 + 200) = +300` simultaneously, with each lane clamped to signed-16 range.
+3. Pairing `qasx` for the real cross term with `qsax` for the imaginary cross term is the canonical Cortex-M33 idiom for complex-number butterflies — 2 instructions instead of ~7 of scalar shuffling.
 
 ## See also
 

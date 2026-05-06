@@ -14,6 +14,8 @@
 DMB {<option>}         @ option defaults to SY
 ```
 
+**When you'd actually use this** — `DMB` is the lightest of the three barriers: it *orders* explicit memory accesses across observers without stalling the core. Use it between writing a buffer and flipping a "ready" flag that another bus master (DMA engine, debugger, in SMP another CPU, or just an ISR running on this CPU) polls — without it, the flag flip can be observed before the buffer write retires, and the consumer reads garbage. Use it before unmasking an IRQ when the ISR depends on shared state being visible. The wrong-but-common alternative is `DSB`: it works but stalls the pipeline and costs more cycles; pick `DMB` when you only need ordering. Pick `ISB` and you've solved the wrong problem entirely — `ISB` doesn't order memory at all, it flushes the instruction pipeline.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -53,6 +55,8 @@ No 16-bit form.
 
 ## Example
 
+### Example 1 — publish a buffer to DMA, then flip the ready flag
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -88,6 +92,39 @@ g_ready: .word 0
 3. The flag store publishes the buffer.
 
 Rule of thumb: use `DMB` for *ordering* between two memory regions visible to multiple observers (CPU + DMA, CPU + debugger). Use `DSB` when you also need the first access to be **complete** before continuing (e.g. before `WFI` or `MSR CONTROL`). Use `ISB` to flush the pipeline.
+
+### Example 2 — share a packet with an ISR via a ready flag
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Producer hands a packet to an IRQ handler via a "ready" flag;
+    @ DMB ensures the payload write is visible before the flag flip.
+    ldr     r0, =g_packet
+    movs    r1, #0x42
+    str     r1, [r0]                @ payload
+    dmb                             @ orders payload before flag
+    ldr     r2, =g_ready
+    movs    r3, #1
+    str     r3, [r2]                @ ISR polling g_ready will see payload too
+loop:
+    b   loop
+
+    .data
+    .align 2
+g_packet: .word 0
+g_ready:  .word 0
+```
+
+**Walkthrough:**
+
+1. `str r1, [r0]` — payload write.
+2. `dmb` — orders the payload before the flag from every observer's perspective. On a single-core M33 you might think this is fine without the barrier, but the bus and write buffer can still reorder externally-visible writes (especially across Normal and Device memory).
+3. `str r3, [r2]` — flag flip. An ISR on the same core that reads `g_ready` then `g_packet` is guaranteed to see the payload too. `DMB` is enough here — we don't need to *complete* the writes, only *order* them, so `DSB` would be overkill.
 
 ## See also
 

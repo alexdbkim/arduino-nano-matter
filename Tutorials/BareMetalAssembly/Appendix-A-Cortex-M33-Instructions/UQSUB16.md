@@ -14,6 +14,8 @@
 UQSUB16 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `UQSUB16` gives you two parallel unsigned 16-bit saturating subtracts where underflow floors at 0. Useful for pairwise *positive deltas* on 16-bit unsigned readings (two-channel histogram-diff, two-channel monotonic counter delta with no negative result, frame-to-frame brightness drop on packed 16-bit pixel pairs). Without `UQSUB16`, getting the same floor-zero behaviour on both lanes takes a `CMP`/`SUB`/`MOVCC #0` × 2 sequence or `UXTH`-and-scalar — ~5 cycles versus 1.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-halfword unsigned saturating subtract
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,32 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `uqsub16 r0, r1, r2` treats each register as 2 packed halfword lanes and subtracted them lane-by-lane.
 3. Each lane is then **saturated** to the unsigned `16`-bit range — no wrap-around, and `APSR.Q` is **not** updated.
+
+### Example 2 — two-channel histogram-bin positive delta
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Two unsigned 16-bit counters packed (hi, lo). Compute positive delta
+    @ vs. previous snapshot; underflow floors at 0 (counters can't go negative).
+    movw    r0, #0x0500         @ lo = current bin A count
+    movt    r0, #0x0800         @ hi = current bin B count
+    movw    r1, #0x0480         @ lo = previous bin A count
+    movt    r1, #0x0900         @ hi = previous bin B count (greater than current!)
+    uqsub16 r2, r0, r1          @ hi clamps to 0, lo gets a real positive delta
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. Two 16-bit histogram counters live packed in `r0` (current) and `r1` (previous).
+2. `uqsub16` produces both deltas in parallel; the high lane (`0x0800 − 0x0900`) would underflow, so it clamps to `0` — perfect for "report only growth" semantics.
+3. The scalar equivalent needs `UXTH`-and-`CMP`-and-conditional-subtract per lane (~5 cycles) for what `uqsub16` does in 1.
 
 ## See also
 

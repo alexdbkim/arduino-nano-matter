@@ -16,6 +16,8 @@ SXTH{<cond>} <Rd>, <Rm>{, ROR #<rotation>}
 
 Optionally rotates `<Rm>` right by 0/8/16/24 bits, takes the bottom 16 bits of the rotated value, and sign-extends to 32 bits in `<Rd>`.
 
+**When you'd actually use this** — when an `int16_t` lives in the low (or, with `ROR #16`, the high) half of a register: an I²S audio sample after a packed load, a signed sensor reading after `LDRH`, or a halfword field unpacked from a register. `SXTH` is the one-instruction alternative to `LSL #16 ; ASR #16` whenever the halfword sits at a halfword boundary; if it doesn't, reach for [`SBFX`](SBFX.md) instead.
+
 ## Operands
 
 | Field        | Type        | Constraints                                                |
@@ -53,6 +55,8 @@ Never updates flags.
 
 ## Example
 
+### Example 1 — sign-extend the upper sample of a packed I²S word
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -79,6 +83,29 @@ loop:
 3. `sxth r2, r0` — the lower halfword is `+1`; bit 15 is `0`, so the upper bits are zero. `r2 = 1`.
 
 Use `SXTH` instead of `LSL #16 ; ASR #16` whenever the source halfword is already at a halfword boundary.
+
+### Example 2 — sign-extend a small negative reading after `LDRH`
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ A native-LE I2C sensor returned a signed 16-bit value of -32 in
+    @ the low halfword of r0 (0xFFE0). Bits 31..16 are zero because
+    @ LDRH zero-extended.  We need a real 32-bit signed -32.
+    ldr     r0, =0x0000FFE0      @ low halfword = 0xFFE0 (= -32 signed)
+    sxth    r1, r0               @ r1 = 0xFFFFFFE0 (-32 in 32-bit form)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `ldr r0, =0x0000FFE0` — stand-in for the result of `ldrh r0, [rSensor]`. The sample is `-32` as an `int16_t`, but the load zero-extended it.
+2. `sxth r1, r0` — sees bit 15 is `1` and fills bits 31..16 with ones, producing `0xFFFFFFE0`. From here `r1` participates correctly in any 32-bit signed arithmetic. (For *big-endian* sensors, [`REVSH`](REVSH.md) does the byte-swap and this sign-extension as a single instruction.)
 
 ## See also
 

@@ -16,6 +16,8 @@ CLZ{<cond>} <Rd>, <Rm>
 
 Writes to `<Rd>` the number of consecutive zero bits at the most-significant end of `<Rm>`. Result is 0 (if bit 31 set) through 32 (if `<Rm>` is zero).
 
+**When you'd actually use this**: CLZ is the one-cycle building block for "where is the topmost set bit?". `31 - CLZ(x)` gives `floor(log2(x))` for `x > 0`, which is the heart of floating-point normalisation, `next_power_of_two`, and choosing the smallest type that will hold a value. Priority encoders (RTOS ready-bitmaps, interrupt scanners) also lean on it — CLZ a 32-bit ready-mask in one cycle to get the highest-priority task ID. The naive software fallback is a 5-iteration loop or a 32-entry lookup; CLZ replaces all of that with a single instruction. Just remember `CLZ(0) = 32`, which you usually want to special-case rather than feed into `1 <<`.
+
 ## Operands
 
 | Field   | Type        | Constraints                          |
@@ -52,6 +54,8 @@ No 16-bit encoding.
 
 ## Example
 
+### Example 1 — fast floor(log2(x))
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,31 @@ loop:
 4. `clz r4, r3` — for `r3 == 0`, the result is **32**, not undefined. That's the value you should special-case if you're computing a logarithm.
 
 `CLZ` is the building block for fast priority encoders, normalising mantissas in software floats, and finding the highest-priority bit in a bitmap.
+
+### Example 2 — round x up to the next power of two
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #100            @ x
+    subs    r0, r0, #1          @ x - 1 so exact powers of two map to themselves
+    clz     r1, r0              @ leading zeros of (x - 1)
+    rsb     r1, r1, #32         @ r1 = 32 - CLZ(x - 1)
+    movs    r2, #1
+    lsl     r2, r2, r1          @ r2 = 1 << (32 - CLZ(x - 1)) = 128
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. Subtracting 1 first means an exact power of two (e.g. `x = 64`) rounds to itself rather than to `2x`.
+2. `clz r1, r0` followed by `rsb r1, r1, #32` computes `32 − CLZ(x−1)`, the bit position one above the topmost set bit of `x − 1`.
+3. `lsl r2, r2, r1` materialises that bit, giving 128 for `x = 100`. The whole sequence is branchless and runs in five cycles.
 
 ## See also
 

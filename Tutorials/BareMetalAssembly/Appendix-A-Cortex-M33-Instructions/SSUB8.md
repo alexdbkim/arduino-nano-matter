@@ -14,6 +14,8 @@
 SSUB8 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `SSUB8` is most often run for its flag side-effect, not its result: `SSUB8 t, a, b; SEL r, a, b` collapses a 4-byte signed compare-and-select into two instructions. **One `APSR.GE` bit is written per byte lane, set when that lane's signed difference is `≥ 0`** — and `SEL` reads them to pick per-lane between `Rn` and `Rm`. That's how vectorized signed max/min/abs become two-op sequences; the scalar equivalent is ~10 instructions with branches. The mod-256 difference left in `Rd` is rarely the point — the per-lane GE flags are the killer feature.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — Per-lane signed byte subtract
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,34 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `ssub8 r0, r1, r2` treats each register as 4 packed byte lanes and subtracted them lane-by-lane.
 3. `APSR.GE` bits flag the lanes whose signed result is `≥ 0`.
+
+### Example 2 — Vectorized abs of 4 signed bytes via SEL
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Vectorized abs() over 4 packed signed bytes in r1.
+    @ Trick: compute (0 − r1) → r3, and SSUB8 sets GE per lane = (0 − lane ≥ 0) = (lane ≤ 0).
+    @ Then SEL picks r3 (the negated lane) where lane ≤ 0, else picks the original.
+    movw    r1, #0x05FE              @ lanes:  0xFE = -2,  0x05 = +5
+    movt    r1, #0x7F80              @ lanes:  0x80 = -128, 0x7F = +127
+    movs    r2, #0
+    ssub8   r3, r2, r1               @ r3 = -r1 lane-wise; APSR.GE[i] = 1 when r1.lane ≤ 0
+    sel     r0, r3, r1               @ r0.lane = (r1 ≤ 0) ? -r1 : r1   → |r1|
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r3 = 0 − r1` per byte — that's both the candidate "negated" value AND the source of per-lane GE flags.
+2. For lane *i*, `APSR.GE[i]` is set iff `0 − r1.lane_i ≥ 0`, i.e. `r1.lane_i ≤ 0`.
+3. `SEL r0, r3, r1` reads `GE[i]`: when set, output `r3.lane_i` (= negated, now positive); when clear, output the original. Result: `|r1|` byte-wise.
+4. Two instructions replace ~10 scalar ones with 4 conditional branches. Note `0x80` (-128) negates back to `0x80` due to mod-256 wrap — a known quirk of two's-complement abs.
 
 ## See also
 

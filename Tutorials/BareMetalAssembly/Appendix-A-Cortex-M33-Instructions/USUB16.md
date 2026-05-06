@@ -14,6 +14,8 @@
 USUB16 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — The standout use of `USUB16` is **per-lane unsigned compare**: `USUB16 t, a, b; SEL r, a, b` is a 2-instruction packed unsigned max (swap to get min). **`APSR.GE` is set on each lane that did NOT borrow** — i.e., where `Rn ≥ Rm` — and `SEL` reads exactly those bits to pick per-lane between `Rn` and `Rm`. The mod-2^16 difference written to `Rd` is usually thrown away; the flags are why you ran the instruction. The scalar equivalent for two halfword lanes is ~6 instructions with branches.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — Per-lane unsigned halfword subtract
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,33 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `usub16 r0, r1, r2` treats each register as 2 packed halfword lanes and subtracted them lane-by-lane.
 3. `APSR.GE` bits flag the lanes whose unsigned subtract had **no borrow** (i.e. `Rn ≥ Rm`).
+
+### Example 2 — Packed unsigned halfword max via USUB16 + SEL
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Unsigned packed max of two halfword lanes via USUB16 + SEL.
+    @ For each lane: GE := (Rn ≥ Rm) → SEL picks Rn, else Rm.
+    movw    r1, #0x00C0              @ a.lo = 0x00C0
+    movt    r1, #0x1000              @ a.hi = 0x1000
+    movw    r2, #0x00FF              @ b.lo = 0x00FF
+    movt    r2, #0x0FFF              @ b.hi = 0x0FFF
+    usub16  r3, r1, r2               @ r3 discarded; APSR.GE[i] = (a.lane_i ≥ b.lane_i)
+    sel     r0, r1, r2               @ r0 = packed unsigned halfword max(a, b)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `USUB16` does `a − b` per halfword. `r3` is throwaway — only `APSR.GE` matters here.
+2. For each lane, `GE` is set when `a ≥ b` (no borrow); cleared otherwise.
+3. `SEL` consumes those GE bits to pick `r1` (a) on lanes where it won, `r2` (b) where it lost — yielding the packed unsigned max in `r0`. Two instructions, no branches.
 
 ## See also
 

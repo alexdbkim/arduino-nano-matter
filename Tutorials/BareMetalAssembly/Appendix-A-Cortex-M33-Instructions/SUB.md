@@ -18,6 +18,8 @@ SUB{<cond>}    <Rd>,  SP,  #<imm>          @ stack-pointer form
 
 `Rd = Rn − operand2`. The `S` suffix sets flags from the result.
 
+**When you'd actually use this**: Decrementing a loop counter (the canonical `subs Rn, #1; bne loop` pattern), computing a buffer length as `end − begin`, pointer rewinds, and generating a small negative immediate. With the `S` suffix you immediately get the compare flags, so `BCC`/`BCS`/`BNE`/`BEQ` work without an explicit `CMP`. Just remember ARM's inverted borrow — `BCC` after `SUBS` means "branch if unsigned less-than" (because `C=0` is a borrow), opposite to x86 conventions. For wide subtraction, `SUBS` must be the *first* instruction of an `SBC` chain or the borrow won't propagate.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -68,6 +70,8 @@ Only with the `S` suffix. `SUBW` (T4) **never** sets flags even though there's n
 
 ## Example
 
+### Example 1 — countdown loop and unsigned compare via SUBS
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -97,6 +101,33 @@ loop:
 2. `bne count` — pure flag-driven branch; no compare instruction needed.
 3. `subs r3, r1, r2` — produces a borrow because 3 < 7, so APSR.C clears (remember: C = !borrow).
 4. `bcc was_less` — "branch if carry clear" is the canonical "branch if unsigned less than" after a `SUBS` or `CMP`.
+
+### Example 2 — buffer-length difference and "is it empty?" branch
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global reset_handler
+    .thumb_func
+reset_handler:
+    ldr     r0, =0x20000100     @ end pointer
+    ldr     r1, =0x20000040     @ begin pointer
+    subs    r2, r0, r1          @ r2 = 0xC0 = 192 bytes; flags reflect r2
+    beq     empty               @ Z=1 means end == begin -> empty buffer
+    lsr     r2, r2, #2          @ /4 -> 48 word elements
+    b       loop
+empty:
+    movs    r2, #0
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `subs r2, r0, r1` — the canonical `end − begin` to size up a buffer. The `S` suffix gives you the compare flags for free.
+2. `beq empty` reuses those flags: Z=1 only when `r0 == r1`, i.e. the buffer is empty. No separate `CMP` needed.
+3. `lsr r2, r2, #2` converts the byte difference to word count. Because the buffer is word-aligned this divide-by-4 is exact; for arbitrary element sizes you'd reach for `UDIV` instead.
 
 ## See also
 
