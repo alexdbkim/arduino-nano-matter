@@ -1,2 +1,8 @@
 Kicad/NanoMatter/.history
 Kicad/NanoMatter/~NanoMatter.kicad_pro.lck
+
+# Build artifacts from `make` in any session
+**/main.o
+**/main.elf
+**/main.bin
+**/main.hex
