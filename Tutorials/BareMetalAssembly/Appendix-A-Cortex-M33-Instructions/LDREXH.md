@@ -16,6 +16,8 @@ LDREXH  <Rt>, [<Rn>]
 
 Half-word sibling of [`LDREX`](LDREX.md). Pairs with [`STREXH`](STREXH.md) to atomically RMW a 16-bit field.
 
+**When you'd actually use this** a 16-bit shared field — ticket counter, compact mutex, version number — needs atomic RMW without growing to 32 bits. `LDREXH`/`STREXH` give you half-word atomicity at the cost of strict 2-byte alignment on the address. Common in compact RTOS objects (e.g. a 16-bit `event_group` flag word) where every byte counts. Without these, you'd either widen to 32 bits or fall back to global interrupt disable — both worse.
+
 ## Operands
 
 | Field  | Type                 | Constraints              |
@@ -53,6 +55,8 @@ R[t] = ZeroExtend(MemA[address, 2], 32);
 
 ## Example — must come paired with STREXH
 
+### Example 1 — Saturating add on 16-bit
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +90,45 @@ hcounter:
 2. `cmp r1, #0xFF00 / bhs skip` — branch over the increment to handle the saturation case in pure-register code.
 3. `strexh r2, r1, [r0]` — commit attempt. Even if we *didn't* modify R1, we still need the matching exclusive store to release the reservation cleanly when retrying.
 4. `bne retry` — replay the whole sequence on failure. This is the part that bites people: nesting two LDREX/STREX pairs (e.g. word + halfword on the same address) gives undefined behaviour — the monitor only tracks one reservation per CPU.
+
+### Example 2 — CAS on 16-bit ticket counter
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Compare-and-swap on a 16-bit ticket: if *t == r3 then *t = r4.
+    ldr     r0, =ticket
+    movw    r3, #0x0010             @ expected
+    movw    r4, #0x0011             @ new
+cas:
+    ldrexh  r1, [r0]                @ arm + read half-word
+    cmp     r1, r3
+    bne     mismatch
+    strexh  r2, r4, [r0]            @ commit
+    cmp     r2, #0
+    bne     cas                 @ contention → retry
+    b       done
+mismatch:
+    clrex                           @ drop reservation explicitly
+done:
+loop:
+    b       loop
+
+    .data
+    .align  2
+ticket:
+    .hword  0x0010
+```
+
+**Walkthrough:**
+
+1. `LDREXH` arms the half-word monitor and reads the current ticket.
+2. On expected-mismatch we `CLREX` to drop the reservation cleanly.
+3. On match, `STREXH` commits and `CBNZ` retries the whole CAS if the monitor was lost — typical multi-producer ticket-grab pattern.
 
 ## See also
 

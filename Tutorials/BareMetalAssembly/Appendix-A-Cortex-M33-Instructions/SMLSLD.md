@@ -14,6 +14,8 @@
 SMLSLD <RdLo>, <RdHi>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — long real-part accumulators for complex matched filters where `Σ (a_k·c_k − b_k·d_k)` needs more than 32 bits. Typical of radio-preamble correlation against thousands of complex samples, long-window DCTs, and audio cross-correlation. SMLSLD is SMLSD's 64-bit big sibling; without it you'd hit Q-flag saturation halfway through a real-world correlation window and have to keep rescaling.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -58,6 +60,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — Single complex-Re step into 64-bit accumulator
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -79,6 +83,36 @@ loop:
 
 1. Clear the 64-bit accumulator pair.
 2. `smlsld` accumulates `Rn[lo]·Rm[lo] - Rn[hi]·Rm[hi]` — the real part of complex multiplication, summed across many samples.
+
+### Example 2 — Long complex correlation: Re-axis 64-bit accumulator
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Σ Re((a_k+b_k i)(c_k+d_k i)) = Σ (a_k c_k - b_k d_k) into {r3:r2}.
+    @ A 32-bit SMLSD would saturate after ~64 full-scale taps; the 64-bit
+    @ form lets us correlate against a 1000+ symbol preamble safely.
+    movs    r2, #0
+    movs    r3, #0
+    ldr     r0, =0x00020001     @ pair 0: [b0=2 : a0=1]
+    ldr     r1, =0x00040003     @ pair 0: [d0=4 : c0=3]
+    smlsld  r2, r3, r0, r1      @ {r3:r2} += 1*3 - 2*4 = -5
+    ldr     r0, =0x7FFF7FFF     @ pair 1: full-scale samples
+    ldr     r1, =0x7FFF7FFF     @ pair 1: full-scale coeffs
+    smlsld  r2, r3, r0, r1      @ no risk of 32-bit overflow on the partial sum
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `{r3:r2}` is the 64-bit running accumulator (RdLo first).
+2. Each SMLSLD folds one complex-multiply real-part into the wide accumulator — two 16×16 multiplies, one subtract, one 64-bit add per cycle.
+3. For a real radar / GFSK preamble correlator you'd run hundreds of these in a loop with `LDR […],#4` post-increments and never have to insert a saturating add.
 
 ## See also
 

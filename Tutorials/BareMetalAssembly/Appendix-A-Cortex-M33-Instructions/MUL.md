@@ -16,6 +16,8 @@ MUL{S}{<cond>} {<Rd>,} <Rn>, <Rm>
 
 `Rd = (Rn × Rm)<31:0>` — the low 32 bits of the 64-bit product. Signed and unsigned multiply produce the same low-32-bit result, so there's only one MUL.
 
+**When you'd actually use this**: 32×32→32 multiply for index calculations (`row*stride + col`), scaling counts by small constants, hash-mixing steps (Knuth multiplicative hash, `x * 0x9E3779B9`), and integer power-of-arbitrary-base. On Cortex-M33 it's a single-cycle op, so it's often the cheapest way to scale — cheaper than a chain of shifts-and-adds for non-trivial multipliers. Reach for `UMULL`/`SMULL` instead the moment you suspect the true product won't fit in 32 bits, because MUL silently throws the high 32 bits away with no flag indication.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -63,6 +65,8 @@ This is the part that bites people: the 32-bit `MUL.W` encoding **cannot** set f
 
 ## Example
 
+### Example 1 — area = width × height (and a wraparound product)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +90,29 @@ loop:
 
 1. `mul r2, r0, r1` — 40×30 = 1200, fits comfortably in 32 bits.
 2. `mul r5, r3, r4` — the *true* product is 2⁶⁴ ÷ 2³² = 2³², which wraps the low 32 bits to 0. MUL gives you no warning. If you need the high half, use [UMULL](UMULL.md) / [SMULL](SMULL.md).
+
+### Example 2 — Knuth multiplicative hash (single-cycle mix)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global reset_handler
+    .thumb_func
+reset_handler:
+    ldr     r0, =0x12345678     @ key
+    ldr     r1, =0x9E3779B9     @ 2^32 / golden_ratio (Knuth's constant)
+    mul     r2, r0, r1          @ low 32 bits of key * constant
+    lsr     r2, r2, #20         @ keep top 12 bits as a 12-bit hash bucket
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `mul r2, r0, r1` produces only the low 32 bits, but for hashing that's exactly what we want — the *upper* bits of those low 32 are the well-mixed ones.
+2. On Cortex-M33 this whole multiplicative-hash step is a single cycle. You'd be hard-pressed to write a faster non-cryptographic mix.
+3. Shifting right keeps the upper hash bits (those depend on every input bit). A `% 4096` instead would only ever look at the low 12 bits.
 
 ## See also
 

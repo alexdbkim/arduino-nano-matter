@@ -16,6 +16,8 @@ REVSH{<cond>} <Rd>, <Rm>
 
 Swaps bytes within `<Rm>[15:0]`, then sign-extends the resulting 16-bit value to 32 bits. Designed for reading a signed big-endian 16-bit field (e.g. a temperature sample from an I²C sensor) and producing the correctly signed native int in one instruction.
 
+**When you'd actually use this** — the canonical "read a signed 16-bit big-endian value" path. Most I²C sensors ship sample bytes MSB-first: BMP180 temperature/pressure deltas, MPU6050 accelerometer/gyro readings, many I²S codec status registers. Without `REVSH` you'd write `REV16` followed by `SXTH` — two instructions instead of one — and that's the *only* reasonable alternative; everything shorter is wrong because it forgets to sign-extend.
+
 ## Operands
 
 | Field  | Type        | Constraints                                       |
@@ -53,6 +55,8 @@ Never updates flags.
 
 ## Example
 
+### Example 1 — signed BE-to-native conversion of a 16-bit reading
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -82,6 +86,30 @@ loop:
 3. `revsh r3, r2` — for a non-negative value, the new bit 15 is `0`, so the upper bits stay zero. No surprise.
 
 Use `REVSH` whenever you would otherwise write `REV16` followed by `SXTH`. It does both jobs in one cycle.
+
+### Example 2 — read a signed I²C temperature sample
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ A BMP180-style temperature register returns a signed 16-bit value
+    @ MSB-first.  We did an LDRH from the I2C buffer; on the LE core that
+    @ leaves bytes swapped: r0[7:0] = high byte (0xFF), r0[15:8] = low byte (0xF6).
+    @ The encoded value is 0xFFF6 = -10. We want -10 in a 32-bit signed int.
+    ldr     r0, =0x0000F6FF      @ halfword as read into r0 (bytes flipped)
+    revsh   r1, r0               @ r1 = 0xFFFFFFF6 = -10 in 32-bit form
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `ldr r0, =0x0000F6FF` — pretend this is the result of `ldrh r0, [r_i2c_buf]`. The two bytes from the wire (`0xFF`, `0xF6`) ended up at `r0[7:0]` and `r0[15:8]` because the core is little-endian.
+2. `revsh r1, r0` — swaps those two bytes (`0xF6FF → 0xFFF6`), notices bit 15 of the swapped halfword is 1, and fills bits 31..16 with ones. Result: `0xFFFFFFF6`, the correct 32-bit `-10`. One instruction does the byte-swap *and* the sign-extension; the alternative `REV16` + `SXTH` would also work but uses an extra cycle.
 
 ## See also
 

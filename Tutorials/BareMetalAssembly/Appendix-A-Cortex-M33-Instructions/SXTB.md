@@ -16,6 +16,8 @@ SXTB{<cond>} <Rd>, <Rm>{, ROR #<rotation>}
 
 Optionally rotates `<Rm>` right by 0/8/16/24 bits, takes the bottom 8 bits of the rotated value, and sign-extends to 32 bits in `<Rd>`. Use it after loading an unsigned byte (or unpacking one from a packed word) when you actually want a signed value.
 
+**When you'd actually use this** — every time you've manually assembled a byte (from `LDRB`, from a packed word, from a parsed wire byte) that's *meant* to be `int8_t`. `LDRB` always zero-extends, so accumulating signed deltas, computing offsets that can go negative, or feeding signed bytes into 32-bit arithmetic all need an explicit sign-extension step. `SXTB` does it in one instruction; the mechanical alternative is `LSL #24 ; ASR #24`, which is two instructions and easy to typo.
+
 ## Operands
 
 | Field        | Type        | Constraints                                                |
@@ -53,6 +55,8 @@ Never updates flags.
 
 ## Example
 
+### Example 1 — sign-extend a byte from inside a packed word
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -80,6 +84,32 @@ loop:
 3. `sxtb r3, r2` — when the byte is positive (`0x40`), bits 31..8 are filled with zeros, giving `+64`.
 
 Use `SXTB` instead of `LSL #24 ; ASR #24` whenever the source byte already lives at a byte boundary — one instruction, one cycle.
+
+### Example 2 — accumulate a signed 8-bit delta into a 32-bit total
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ A peripheral hands us byte-sized signed deltas (think encoder ticks).
+    @ LDRB / MOVS would zero-extend, so adding 0xF6 (= -10 as int8_t)
+    @ would bump the total by +246. SXTB fixes that.
+    movs    r0, #0xF6           @ delta byte from the peripheral, meant as -10
+    sxtb    r1, r0              @ r1 = 0xFFFFFFF6 = -10 as int32
+    movs    r2, #100            @ running total
+    add     r2, r2, r1          @ r2 = 100 + (-10) = 90
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `movs r0, #0xF6` — pretend this came from `LDRB` of a signed delta. As a raw byte it's `0xF6`; as `int8_t` it's `-10`.
+2. `sxtb r1, r0` — sees bit 7 is `1` and fills bits 31..8 with ones, giving `0xFFFFFFF6`. Now `r1` is the proper 32-bit `-10`.
+3. `add r2, r2, r1` — adding a signed 32-bit `-10` decreases the total. Without the `SXTB`, the same `add` would have used `+246` and silently corrupted the running tally.
 
 ## See also
 

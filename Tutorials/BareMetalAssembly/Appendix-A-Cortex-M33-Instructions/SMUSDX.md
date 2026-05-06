@@ -14,6 +14,8 @@
 SMUSDX <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — the cross-difference `a·d − b·c`, which is the imaginary part of `(a+bi)(c−di)` (i.e. multiply by the *conjugate* of `w`). That's how OFDM matched filters, IQ demodulators, and DCT-IV butterflies rotate samples by `e^{−jθ}`. Pair with SMLAD for the corresponding real part (`a·c + b·d`) and you have a 2-cycle conjugate complex multiply — the kernel of every BLE channel-estimator on the EFR32MG24.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -54,6 +56,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — Single cross-difference, no accumulator
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -73,6 +77,35 @@ loop:
 
 1. Same packing as SMUSD; halves of Rm are exchanged.
 2. `smusdx` produces `Rn[lo]*Rm[hi] - Rn[hi]*Rm[lo]`.
+
+### Example 2 — Conjugate complex multiply (rotate by e^{−jθ}) in two instructions
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Conjugate multiply x * conj(w) = (a+bi)(c-di) = (a*c + b*d) + j(b*c - a*d).
+    @ With Rn=[b:a] and Rm=[d:c]:
+    @   Re = a*c + b*d  -> SMLAD with Ra=0  (or SMUAD)
+    @   Im = b*c - a*d  -> -SMUSDX
+    @ Use SMUAD for the real axis, SMUSDX for −Im.
+    ldr     r2, =0x00020001     @ x: [b=2 : a=1]
+    ldr     r3, =0x00040003     @ w: [d=4 : c=3]
+    smuad   r0, r2, r3          @ Re: 1*3 + 2*4 = 11
+    smusdx  r1, r2, r3          @ -Im: 1*4 - 2*3 = -2  (so Im = +2)
+    rsbs    r1, r1, #0          @ negate to get Im = b*c - a*d = +2
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. SMUSDX gives `a·d − b·c`; the imaginary part of conjugate multiplication is the negative of that, hence the `RSBS` to flip sign.
+2. Combined with SMUAD for the real axis, this performs `x · conj(w)` — the operation an IQ demodulator applies every sample to undo a known carrier rotation.
+3. The whole rotate-by-conjugate fits in 3 instructions; without DSP it is 6+ instructions and burns roughly 4× the cycles per sample.
 
 ## See also
 

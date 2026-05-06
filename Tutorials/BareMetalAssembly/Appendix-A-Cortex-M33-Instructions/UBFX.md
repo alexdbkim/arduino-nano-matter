@@ -16,6 +16,8 @@ UBFX{<cond>} <Rd>, <Rn>, #<lsb>, #<width>
 
 Copies `<width>` bits starting at bit `<lsb>` of `<Rn>` into the bottom of `<Rd>`. Bits 31..`<width>` of `<Rd>` are zeroed. The classic "decode a bit field of an MMIO register" instruction.
 
+**When you'd actually use this** — pulling an *unsigned* packed value out of a register: a 12-bit ADC reading sitting in bits [15:4] of a status word, a 5-bit interrupt vector index, a 1-bit pending flag, or any `(reg >> shift) & mask` you'd write in C. `UBFX` collapses the shift-and-mask pair into a single instruction *and* avoids loading a mask constant from a literal pool; the `LSR + AND` alternative is two instructions plus a literal-pool slot whenever the mask doesn't fit a Thumb-2 modified-immediate.
+
 ## Operands
 
 | Field     | Type        | Constraints                                       |
@@ -55,6 +57,8 @@ No 16-bit encoding.
 
 ## Example
 
+### Example 1 — decode three sub-fields of a status register
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -80,6 +84,28 @@ loop:
 3. `ubfx r3, r0, #22, #1` — single-bit extract; result is 0 or 1. Cleaner than `LSR + AND #1`.
 
 Use `UBFX` whenever you'd write `(reg >> shift) & mask` in C — it's one cycle and reads better in disassembly.
+
+### Example 2 — extract a 12-bit ADC reading from bits [15:4]
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ A SAR-ADC packs a 12-bit unsigned reading into bits [15:4] of a
+    @ 16-bit half-word. Bits [3:0] are status flags we want to discard.
+    ldr     r0, =0x0000ABC0      @ packed half-word; reading = 0xABC, flags = 0
+    ubfx    r1, r0, #4, #12      @ r1 = 0x00000ABC (the raw 12-bit ADC count)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `ldr r0, =0x0000ABC0` — bits [15:4] are the 12-bit reading `0xABC`; bits [3:0] are unrelated status flags we don't care about.
+2. `ubfx r1, r0, #4, #12` — extracts those 12 bits straight into `r1[11:0]` and zeroes the rest. Equivalent to `(r0 >> 4) & 0xFFF`, but one instruction and no constant load. Because the field is unsigned, `UBFX` is the right choice; for a *signed* field (e.g. a temperature delta) you'd use [`SBFX`](SBFX.md) instead.
 
 ## See also
 

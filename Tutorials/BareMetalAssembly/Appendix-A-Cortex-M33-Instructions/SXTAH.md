@@ -14,6 +14,8 @@
 SXTAH  <Rd>, <Rn>, <Rm>{, ROR #<amount>}
 ```
 
+**When you'd actually use this** is the bread-and-butter "widen a signed Q15 sample to Q31 while accumulating into a running sum" step you find in every audio mean / DC-removal / RMS pre-stage. One `SXTAH` replaces `SXTH tmp, x` + `ADD acc, acc, tmp` and avoids the scratch register; the `ROR #16` form lets you grab the top halfword without a separate shift, exactly what you want when samples arrive packed two per word.
+
 Take the bottom halfword of `Rm` (after an optional rotate), sign-extend to 32 bits, add to `Rn`. The halfword equivalent of `SXTAB`.
 
 ## Operands
@@ -57,6 +59,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — adding two packed Q15 samples into a Q31 sum
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -80,6 +84,40 @@ loop:
 3. Second `sxtah ..., ror #16` — `r0` is rotated so its top half lands in bits [15:0], that halfword (`0x8001` = -32767) is sign-extended to `0xFFFF8001` and added. Net result: 0.
 
 This is the bread-and-butter "widen a Q15 sample to Q31 while accumulating" pattern in audio code.
+
+### Example 2 — Q15 sample stream into a Q31 running mean accumulator
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Walk a buffer of N signed Q15 audio samples, accumulating into a
+    @ Q31 running sum. Divide by N afterwards to get the Q15 mean
+    @ (handy for DC-offset / bias removal in a microphone front-end).
+    ldr     r0, =sample_data
+    movs    r1, #4               @ N samples
+    movs    r2, #0               @ Q31 accumulator
+1:
+    ldrh    r3, [r0], #2         @ next packed Q15 sample (zero-extended by LDRH)
+    sxtah   r2, r2, r3           @ ... but treat low halfword as signed and accumulate
+    subs    r1, r1, #1
+    bne     1b
+loop:
+    b   loop
+
+    .balign 2
+sample_data:
+    .hword 0x7FFF, 0x8001, 0x4000, 0xC000   @ +32767, -32767, +16384, -16384 → sum = 0
+```
+
+**Walkthrough:**
+
+1. `ldrh` zero-extends, so a naïve `ADD r2, r2, r3` would treat `0x8001` as +32769 instead of −32767 — a textbook silent sign bug.
+2. `sxtah r2, r2, r3` sign-extends the bottom halfword of `r3` to 32 bits and accumulates in one cycle; the running sum stays correct in Q31.
+3. After four samples `r2 = 0`, exactly the Q31 mean × N you'd expect for a balanced waveform. To target the *top* halfword of a packed pair instead, swap in `sxtah r2, r2, r3, ror #16` — no separate shift, no scratch register.
 
 ## See also
 

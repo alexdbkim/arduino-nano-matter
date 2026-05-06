@@ -27,6 +27,8 @@ STMDB{<cond>}       <Rn>{!}, <reglist>      @ decrement-before  (== PUSH when Rn
 
 Registers are stored in *increasing* register-number order to *increasing* addresses.
 
+**When you'd actually use this**: efficient prologue spill of several working registers in one instruction, dumping the whole CPU register file into a fault-handler crash buffer, copying a small fixed-size struct in one bus burst, or zero-filling a region by listing the same zero register multiple times via a sequence of `STM`s. A single `STM {r4-r11}` is one 32-bit instruction and one bus burst; the equivalent eight `STR`s would be 16+ bytes of code and eight separate transactions. The trade-off is rigidity: the register list must be a static set of low-to-high registers, addresses must be word-aligned (always traps if not), and you cannot reorder which register lands where.
+
 ## Operation (pseudocode)
 
 ```text
@@ -65,6 +67,8 @@ If `<Rn>` is in `<reglist>` with writeback:
 
 ## Example
 
+### Example 1 — Context save and STMDB-as-PUSH
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -96,6 +100,34 @@ ctx:
 1. `stm r0!, {r4-r7}` — writes R4 at `*r0`, R5 at `*(r0+4)`, …, R7 at `*(r0+12)`, then advances R0 by 16. Note the order: lowest register goes to the lowest address.
 2. `stmdb sp!, {r4, r5, lr}` — decrement-before with SP writeback: SP first drops by 12, then registers are written. This is *literally* what `PUSH {r4, r5, lr}` assembles to.
 3. `ldmia sp!, {r4, r5, lr}` — symmetric POP. This is the part that bites people: the AAPCS-mandated stack on Cortex-M is full-descending — i.e. **STMDB / LDMIA on SP** — get those backwards and you'll trash the stack frame on the way back.
+
+### Example 2 — Fault-handler register dump
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Capture r0..r12 + LR into a crash buffer for post-mortem.
+    ldr     r0, =crash_buf
+    stm     r0!, {r1-r12, lr}   @ crash_buf[0..12] = r1..r12, lr
+    @ r0 now points one past the last stored word.
+loop:
+    b       loop
+
+    .data
+    .align  2
+crash_buf:
+    .space  64
+```
+
+**Walkthrough:**
+
+1. One `STM` with writeback dumps 13 registers in a single instruction — no faulting handler wants to issue 13 separate `STR`s when it's already in trouble.
+2. The `!` advances `r0` by `4 × 13 = 52` bytes, so a follow-up `STR` could append PSR or the stacked exception frame pointer with no extra book-keeping.
+3. Registers are written in increasing register-number order to increasing addresses, so `crash_buf[0]` is `r1`, `crash_buf[1]` is `r2`, etc. — match this layout in the C struct that the post-mortem viewer reads.
 
 ## See also
 

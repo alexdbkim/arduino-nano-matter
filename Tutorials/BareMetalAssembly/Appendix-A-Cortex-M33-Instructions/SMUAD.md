@@ -14,6 +14,8 @@
 SMUAD <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — a single-shot 2-element Q15 dot product (no accumulator). Most useful as the *first* iteration of a manual reduction (set `r0` with SMUAD, then keep accumulating with SMLAD), and for `|x|² = re² + im²` of a complex sample packed `[im:re]`: `SMUAD r0, r1, r1` produces magnitude-squared in one cycle. Without it, magnitude-squared takes two `SMUL*` plus an `ADD` (≈3× cycles); on M0+ with no DSP it's 4–5×.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -54,6 +56,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — 2-element dot product, no accumulator
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -74,6 +78,31 @@ loop:
 1. Load two pairs of Q15 (or any int16) values.
 2. `smuad` returns the dot product of the pair in one cycle — handy for inner kernels that don't carry an accumulator across iterations.
 3. If the dual sum overflows 32 bits (only possible when both products are `0x40000000` of the same sign), `Q` sticks.
+
+### Example 2 — Magnitude-squared of a complex Q15 sample in one instruction
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ |x|^2 = re^2 + im^2 of a complex sample packed [im:re].
+    @ SMUAD r0, r1, r1 squares each lane and sums them in one cycle.
+    ldr     r1, =0x00040003     @ x = 3 + 4j  (re=3, im=4)
+    smuad   r0, r1, r1          @ r0 = 3*3 + 4*4 = 25
+    ldr     r1, =0xFFFB0005     @ x = 5 - 5j  (re=5, im=-5 sign-extended)
+    smuad   r2, r1, r1          @ r2 = 5*5 + (-5)*(-5) = 50
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. With `Rn = Rm`, SMUAD produces `re·re + im·im` — a one-cycle complex magnitude-squared, independent of how the lanes are interpreted as Q15 or plain int16.
+2. This is the per-sample work of an FFT power spectrum (`|X[k]|²`) or RSSI estimator — the core of every BLE / Wi-Fi receiver running on the EFR32MG24.
+3. Without SMUAD: `SMULBB r2, r1, r1; SMULTT r3, r1, r1; ADD r0, r2, r3` — 3 instructions, 3+ cycles, instead of 1.
 
 ## See also
 

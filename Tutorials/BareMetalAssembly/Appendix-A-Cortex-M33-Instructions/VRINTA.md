@@ -14,6 +14,9 @@
 VRINTA.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you need the schoolbook-rounded value of a float kept *as a float* so the next FPU instruction can keep flowing. Same **A = Away-from-zero ties** mnemonic as [VCVTA](VCVTA.md), but the result stays in an S register. Typical context: `roundf(x) * scale` in audio gain or graphics math, where converting to int and back would lose precision and cost a wider register round-trip. Without it you'd `VCVTA` then `VCVT.F32.S32` back — double the latency, and a possible saturation if `x` is huge.
+
+
 Unconditional. Result is still a float — the value is rounded to an integer,
 but the type stays `F32`. Compare with [VCVTA](VCVTA.md), which produces a
 32-bit integer.
@@ -56,6 +59,9 @@ Independent of `FPSCR.RMode`. Sign of zero and infinities are preserved.
 
 ## Example
 
+
+### Example 1 — result stays float, ties go away from zero
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +92,29 @@ loop:
 Use `VRINTA` when you need the rounded value to keep flowing through more
 floating-point math, e.g. computing `roundf(x) * scale`. If the next step
 needs an integer, use [VCVTA](VCVTA.md) and skip the round-trip.
+
+### Example 2 — roundf(x) * scale staying in the float pipeline
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  round_then_scale
+    .thumb_func
+round_then_scale:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ s0 = input float, s1 = scale factor
+    vrinta.f32 s2, s0             @ s2 = roundf(s0), still F32
+    vmul.f32   s0, s2, s1         @ s0 = roundf(s0) * scale
+    bx         lr
+```
+
+**Walkthrough:**
+
+1. `vrinta.f32 s2,s0` performs schoolbook rounding but keeps the result as a float in `s2`.
+2. `vmul.f32 s0,s2,s1` immediately re-uses it in float math — no detour through an integer register, no risk of saturating very large inputs.
+3. If you needed an `int` instead, swap to [VCVTA](VCVTA.md) and skip the float path entirely.
 
 ## See also
 

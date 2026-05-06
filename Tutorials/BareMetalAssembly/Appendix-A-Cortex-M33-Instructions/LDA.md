@@ -16,6 +16,8 @@ LDA  <Rt>, [<Rn>]
 
 Like [`LDR`](LDR.md), but the access has *acquire* memory-ordering semantics: any subsequent memory access in program order is observed *after* this load by other observers. New in ARMv8-M — neither ARMv7-M nor ARMv6-M had it.
 
+**When you'd actually use this** a foreground task waits on a *data-ready* flag that an ISR (or another core) sets after filling a ring-buffer slot — `LDA` of the flag fences subsequent payload reads so they cannot be hoisted above the flag check. C11 compilers emit this for `atomic_load_explicit(x, memory_order_acquire)`. The single-sided fence is cheaper than a full `DMB ISH` and self-documenting in disassembly. On a single-issue M33 a plain `LDR` *appears* to work, but the moment the code is ported to a Cortex-A or future M-profile part with reordering it silently breaks.
+
 ## Operands
 
 | Field  | Type                 | Constraints                          |
@@ -55,6 +57,8 @@ Acquire semantics give you a one-sided "fence" — cheaper than a full [`DMB`](D
 
 ## Example
 
+### Example 1 — Acquire-poll a ready flag
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +90,37 @@ payload:
 1. `lda r2, [r0]` — reads the flag with acquire semantics.
 2. `cmp / beq poll` — spin until the producer publishes a non-zero flag.
 3. `ldr r3, [r1]` — once we see the flag, the architecturally guaranteed ordering means this payload load cannot be reordered *before* the `LDA`. Without `LDA` (i.e. plain `LDR` for the flag), you'd need a [`DMB`](DMB.md) between the flag-check and the payload-read on a multi-issue or multi-core system. This is the part that bites people: M33 in this SoC is single-core, so a plain `LDR` *appears* to behave the same — your code becomes non-portable to Cortex-A or future M-profile parts that exploit reordering.
+
+### Example 2 — Consume a published linked node
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Reader pops a node pointer published by a producer with STL.
+    ldr     r0, =head_ptr
+    lda     r1, [r0]                @ acquire the head pointer
+    cbz     r1, empty               @ null → list empty
+    ldr     r2, [r1, #0]            @ node->value — load is ordered after LDA
+    ldr     r3, [r1, #4]            @ node->next  — same
+empty:
+loop:
+    b       loop
+
+    .data
+    .align  2
+head_ptr:
+    .word   0
+```
+
+**Walkthrough:**
+
+1. `LDA r1, [r0]` acquire-loads the head pointer published by the producer.
+2. If non-null, the two `LDR`s read the node fields. The architecture forbids the CPU from speculatively issuing those loads *before* the `LDA` is observed — so the producer's writes to `node->value`/`node->next` (sequenced before its `STL`) are guaranteed visible.
+3. Replace `LDA` with `LDR` and you have a classic *consume-bug*: the reader could see a non-null pointer with stale node fields.
 
 ## See also
 

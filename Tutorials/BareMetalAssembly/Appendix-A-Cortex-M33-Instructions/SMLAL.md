@@ -16,6 +16,8 @@ SMLAL{<cond>} <RdLo>, <RdHi>, <Rn>, <Rm>
 
 `RdHi:RdLo = (RdHi:RdLo) + SignExtend(Rn) × SignExtend(Rm)`. Treats both factors as signed and sign-extends the partial product before adding to the 64-bit accumulator.
 
+**When you'd actually use this**: SMLAL is the workhorse of high-dynamic-range DSP — FIR/IIR filters with Q31 coefficients applied to Q15 samples and accumulated in Q63 so long convolutions cannot overflow. It also shows up in big-integer multiply-accumulate inner loops (Karatsuba, Montgomery multiplication). One instruction does what would otherwise be `SMULL` + a 64-bit add — a real two-cycle saving per tap. Remember to seed `RdLo:RdHi` to a sane signed 64-bit value before the first SMLAL; leaving them undefined silently corrupts the accumulator.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -57,6 +59,8 @@ Never on Armv8-M.
 
 ## Example
 
+### Example 1 — signed dot product into a 64-bit accumulator
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -84,6 +88,30 @@ loop:
 
 1. The accumulator is initialised to 0 across both registers. SMLAL needs the pair to already hold a sane signed value; you can also seed it with a non-zero bias (split into lo/hi) before the loop.
 2. Each `smlal` adds a signed product to the 64-bit accumulator in one cycle. Even with two `INT32_MIN × INT32_MAX` products you cannot overflow 64 bits — that's the whole point of accumulating wide.
+
+### Example 2 — seed the accumulator with a non-zero bias, then MAC
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global reset_handler
+    .thumb_func
+reset_handler:
+    ldr     r4, =0x10000000     @ acc.lo bias
+    movs    r5, #0              @ acc.hi = 0  (acc starts at +0x10000000)
+    ldr     r0, =-32768         @ Q15 sample (-1.0)
+    ldr     r1, =-32768         @ Q15 coefficient (-1.0)
+    smlal   r4, r5, r0, r1      @ acc += (-1.0) * (-1.0) in Q30 = +0x40000000
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. Initialising `r5:r4` to `0x00000000_10000000` shows that SMLAL really does *read* its destination — the new product is added to whatever signed 64-bit value is already there.
+2. `smlal r4, r5, r0, r1` adds the signed 64-bit product `(-32768) × (-32768) = +0x40000000` to the accumulator, leaving `r5:r4 = 0x00000000_50000000`.
+3. In a real Q15 FIR you'd run this inside a tight loop with one SMLAL per tap; the 64-bit headroom guarantees no overflow even after thousands of taps with worst-case inputs.
 
 ## See also
 

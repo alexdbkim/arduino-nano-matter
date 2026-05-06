@@ -16,6 +16,8 @@ TrustZone for Armv8-M splits the chip into two worlds, **Secure** and **Non-secu
 SG
 ```
 
+**When you'd actually use this:** `SG` is the *doorway* every secure-callable veneer starts with. On the Arduino Nano Matter the EFR32MG24's Silicon Labs **Secure Library** (key vault, attestation signing for Matter, secure-boot helpers) runs in Secure state and exposes its API only through NSC veneers — every one of those veneers begins with `SG`. Without that mandate, a Non-secure attacker could `BL` a few bytes past the official entry point and skip the privilege / argument-validation prologue; the architecture forbids it by raising **SecureFault (INVEP)** on any branch from NS into Secure that does not land on an `SG`. Think of it as the bouncer-checked door: you can only enter the club through *this* door, and only at this exact spot.
+
 No operands. Always 32-bit, always unconditional.
 
 ## Operands
@@ -61,6 +63,8 @@ else
 
 ## Example
 
+### Example 1 — NSC veneer for a secure-callable add
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -93,6 +97,32 @@ loop:
 3. `bxns lr` — returns to the Non-secure caller, switching state back. See [BXNS](BXNS.md).
 
 The NSC region itself is configured by the **SAU** (Secure Attribution Unit) or IDAU at boot. Only addresses tagged NSC are valid `SG` sites.
+
+### Example 2 — SG followed by a Non-secure caller-privilege check
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Illustrative — full use requires a CMSE-enabled toolchain build.
+    @ SG demo 2: secure-callable that refuses unprivileged Non-secure callers.
+    sg                          @ legal NS->S entry (must be in an NSC region)
+    mrs     r2, control_ns      @ read the Non-secure CONTROL register
+    tst     r2, #1              @ bit 0 = nPRIV_NS: 1 if NS caller is unprivileged
+    bne     .Lreject
+    movs    r0, #0              @ success status -> NS
+    bxns    lr                  @ return to NS caller
+.Lreject:
+    movs    r0, #1              @ non-zero error code
+    bxns    lr
+loop:
+    b       loop
+```
+
+**Walkthrough:** `sg` is the only legal landing pad for a Non-secure `BL` into this NSC region; the hardware switches the core to Secure state right here. `mrs r2, control_ns` reads the *Non-secure* `CONTROL` register from Secure state — that's how Secure code learns whether its NS caller is privileged. We refuse unprivileged callers with a non-zero status, otherwise return success. The whole function ends with `bxns lr` to drop back into Non-secure state. Without the leading `SG`, a Non-secure attacker could simply `BL` to the address of `mrs` and skip the gate altogether — except they can't, because the SAU would raise SecureFault.
 
 ## See also
 

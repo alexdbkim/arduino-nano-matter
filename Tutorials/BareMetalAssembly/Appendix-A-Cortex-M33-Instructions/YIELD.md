@@ -14,6 +14,8 @@
 YIELD
 ```
 
+**When you'd actually use this** — `YIELD` is a portability hint: on multi-threaded implementations it tells the implementation "I'm spinning, please run someone else", and on the bare-metal M33 it's architecturally a NOP. Sprinkle it into the back-off path of `LDREX`/`STREX` retry loops and software spinlocks as RTOS-portability hygiene; if the code ever moves to a hyperthreaded host or an OS that hooks `YIELD`, you get descheduling for free. It does **not** save power — for that, use `WFE` so the core actually goes to sleep. Treat `YIELD` as documentation of intent more than an instruction with teeth.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -51,6 +53,8 @@ Never updates flags.
 
 ## Example
 
+### Example 1 — YIELD inside a flag-polling spin
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -79,6 +83,41 @@ g_flag: .word 0
 3. `yield` — hint to the implementation. On the Nano Matter's M33 it's architecturally a NOP, but it documents intent and is free to keep around if the code ever moves to an RTOS that hooks it.
 
 For real power savings on this chip, prefer `WFE`/`WFI` — `YIELD` does **not** reduce current.
+
+### Example 2 — RTOS-portable LDREX/STREX try-lock
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Try-lock: LDREX/STREX with YIELD between attempts so an
+    @ RTOS that hooks YIELD can deschedule us during contention
+    ldr     r0, =g_lock
+1:  ldrex   r1, [r0]
+    cbnz    r1, 2f                  @ already held?
+    movs    r2, #1
+    strex   r3, r2, [r0]            @ try to take it
+    cbz     r3, 3f                  @ success
+2:  yield                           @ contended — hint we'd like to be paused
+    b       1b
+3:  @ critical section here
+loop:
+    b   loop
+
+    .data
+    .align 2
+g_lock: .word 0
+```
+
+**Walkthrough:**
+
+1. `ldrex` reads the lock word and arms the exclusive monitor.
+2. `cbnz` skips to the back-off path if it's already held.
+3. `strex` attempts to commit `1` atomically; non-zero result = lost the race.
+4. `yield` — on bare-metal M33 this is a NOP and we just spin, but if this binary ever runs on a hyperthreaded core or under an RTOS that hooks YIELD, contention back-off becomes free.
 
 ## See also
 

@@ -17,6 +17,8 @@ LDMDB{<cond>}       <Rn>{!}, <reglist>     @ decrement-before
 
 `LDMIA` (= `LDMFD`, "full-descending") is the default and what assemblers emit when you write plain `LDM`. `LDMDB` ("empty-ascending") is the matching pop for an `STMDB`/`PUSH`-style growth.
 
+**When you'd actually use this.** `LDM` shows up wherever code wants to slurp several consecutive words in one shot: function epilogues that restore many callee-saved registers (`ldmia sp!, {r4-r11, pc}` is the RTOS-task-resume idiom), bulk struct copies, or DMA-descriptor / context-block restores. One 32-bit `LDM` replaces N separate `LDR`s — fewer instructions, smaller code, and on most M-class cores it streams faster because the bus pipeline can chain the words back-to-back. The alternative — writing four `LDR`s by hand — costs four times the I-fetch bandwidth and four immediate-offset slots for what is logically one operation, plus you have to track the running offset yourself.
+
 ## Operands
 
 | Field      | Type            | Constraints                                                              |
@@ -64,6 +66,8 @@ if writeback then
 
 ## Example
 
+### Example 1 — bulk register restore from a context block
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -93,6 +97,33 @@ ctx_top:
 1. `ldm r0, {r4, r5, r6, r7}` — non-writeback: R4 ← `*r0`, R5 ← `*(r0+4)`, ..., R7 ← `*(r0+12)`. R0 itself is unchanged.
 2. `ldm r0!, {r1, r2, r3}` — *with* writeback (`!`): after the load, R0 += 12. The bracketed list is reordered by register number; the actual memory order is R1 first (lowest reg), then R2, then R3.
 3. `ldmdb r8!, {r4, r5}` — decrement-before: address starts at `r8 - 8`, loads R4 from there and R5 from `r8 - 4`, then R8 -= 8. This is the part that bites people: the assembler letter you write (`IA`/`DB`/`FD`/`EA`) only changes encoding, not the rule that lower-numbered registers always touch lower addresses.
+
+### Example 2 — streaming through DMA descriptors with writeback
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ LDM demo 2: copy successive 4-word DMA descriptors into working registers.
+    ldr     r0, =desc_table
+    ldmia   r0!, {r1, r2, r3, r12}  @ src, dst, count, ctrl  (r0 advances by 16)
+    ldmia   r0!, {r4, r5, r6, r7}   @ next descriptor — base already advanced
+loop:
+    b       loop
+
+    .align  2
+desc_table:
+    .word   0x20000000, 0x20001000, 0x00000040, 0x000000A1
+    .word   0x20002000, 0x20003000, 0x00000080, 0x000000A2
+```
+
+**Walkthrough:**
+
+1. `ldmia r0!, {r1, r2, r3, r12}` — loads four words from `desc_table` into the four registers in increasing-register-number order, then writes back R0 += 16 (`!`). One instruction reads the *src/dst/count/ctrl* fields of a DMA descriptor.
+2. `ldmia r0!, {r4, r5, r6, r7}` — because R0 already advanced, this picks up the *next* descriptor with no offset bookkeeping. The `!` is what makes streaming over a contiguous table cheap.
 
 ## See also
 

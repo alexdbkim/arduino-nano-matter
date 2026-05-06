@@ -15,6 +15,8 @@ VPOP {<Sx>-<Sy>}         @ alias for VLDMIA SP!, {Sx-Sy}
 VPOP {<Dx>-<Dy>}         @ alias for VLDMIA SP!, {Dx-Dy}
 ```
 
+**When you'd actually use this** — `VPOP` is the FPU half of a function epilogue. Per AAPCS-VFP, registers `S16`–`S31` are callee-saved, so any function that uses them must restore the originals before returning; compilers emit a matching `VPUSH` at the top and `VPOP` at the bottom. It also shows up in RTOS context-switch glue (FreeRTOS `xPortPendSVHandler` for non-lazy-stacking ports) and in trampolines that briefly borrow callee-saved FPU registers to hold a hot DSP coefficient across a callback. Without `VPOP`, the same restore would take N separate `VLDR` instructions plus an explicit `ADD SP, SP, #N*4` — bigger and slower than the single multi-register transfer.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -58,6 +60,8 @@ VPOP is exactly `VLDMIA SP!, {list}`.
 
 ## Example
 
+### Example 1 — callee-saved restore (S16–S19)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -89,6 +93,37 @@ loop:
 5. `loop: b loop` — park.
 
 This is the part that bites people: VPOP **must** mirror the matching VPUSH list exactly. Popping `{s16-s17}` after pushing `{s16-s19}` does not "do half" — it leaves `SP` mis-aligned with the saved frame and the next return will explode. Always pair VPUSH/VPOP with identical lists.
+
+### Example 2 — epilogue restoring eight callee-saved regs (S16–S23)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VPOP demo 2: function-style frame around a body that scribbles eight callee-saved regs.
+    vpush    {s16-s23}            @ prologue: SP -= 32, save S16..S23
+    vmov.f32 s16, #1.0            @ body uses callee-saved scratch
+    vmov.f32 s17, #2.0
+    vmov.f32 s23, #9.0
+    vadd.f32 s24, s16, s17        @ S24..S31 are caller-saved, scribble freely
+    vpop     {s16-s23}            @ epilogue: restore mirrors prologue exactly
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `vpush {s16-s23}` — save the eight callee-saved registers we plan to clobber. SP drops by 32.
+2. The body writes to `S16`, `S17`, `S23` (callee-saved, must be restored) and `S24` (caller-saved, free to scribble).
+3. `vpop {s16-s23}` — restore. The list is **identical** to the VPUSH list; if you pushed eight, you must pop eight — no exceptions, no partial pops.
+4. `loop: b loop` — park.
+
+Caller-saved (`S0–S15`) versus callee-saved (`S16–S31`) is purely an AAPCS convention; the hardware doesn't care. But if your function violates it, every caller in the codebase silently corrupts.
 
 ## See also
 

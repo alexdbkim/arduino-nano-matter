@@ -14,6 +14,8 @@
 QADD8 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `QADD8` is the one-cycle answer when you have *four* signed 8-bit values packed into a 32-bit word and want to add a second packed quad lane-by-lane with clamping. Real DSP cases: a 4-channel 8-bit audio mixer, a vector-of-bytes accumulator that mustn't wrap (e.g. signed gradient fields in a tiny vision pipeline), or running totals over packed signed deltas. Without `QADD8`, the same job requires four `SXTB` / scalar `QADD` / `STRB` sequences — roughly 8–12 cycles versus the one cycle the SIMD form pays.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-byte signed saturating add
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,33 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `qadd8 r0, r1, r2` treats each register as 4 packed byte lanes and added them lane-by-lane.
 3. Each lane is then **saturated** to the signed `8`-bit range — no wrap-around, but `APSR.Q` is **not** updated.
+
+### Example 2 — four-channel signed audio frame mix
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Mix two packed signed audio frames (4 mono samples per word).
+    @ r0 = sample frame A : { +120, -100, +50, -10 }   bytes hi..lo
+    @ r1 = sample frame B : {  +20,  +30, +60, -20 }
+    movw    r0, #0x320A         @ low half:  0x32 = +50, 0x0A wraps -> use proper bytes
+    movt    r0, #0x789C         @ high half: 0x78 = +120, 0x9C = -100 (signed)
+    movw    r1, #0x3CEC         @ 0x3C = +60, 0xEC = -20
+    movt    r1, #0x141E         @ 0x14 = +20, 0x1E = +30
+    qadd8   r2, r0, r1          @ four signed 8-bit adds, each clamped to [-128,+127]
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` and `r1` each carry four packed signed 8-bit audio samples.
+2. `qadd8` adds them lane-by-lane in one cycle; any lane that would exceed `+127` saturates to `+127`, any lane that would go below `−128` saturates to `−128`.
+3. Doing the equivalent without SIMD would cost four `SXTB`/`QADD`/`STRB` sequences plus repacking — roughly 8–12 cycles for what `qadd8` does in 1.
 
 ## See also
 

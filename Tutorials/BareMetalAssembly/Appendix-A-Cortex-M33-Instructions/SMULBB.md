@@ -14,6 +14,8 @@
 SMULBB <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** is the bottom-half × bottom-half lane of a packed-Q15 inner loop. When you've stored two int16 samples per word as `[T|B]` (top half = bits 31:16, bottom half = bits 15:0), one `LDR` of `[s1|s0]` and one `LDR` of `[c1|c0]` lets `SMULBB` pick `s0*c0` in one cycle. Without it you'd need `SXTH` to sign-extend each half, then a full 32×32 `SMULL` — three instructions instead of one. This is the foundation of every interleaved stereo audio filter and packed-state IIR biquad on Cortex-M33.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -50,6 +52,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — Q15 × Q15 → Q30 product
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -69,6 +73,30 @@ loop:
 
 1. Load two Q15 values into the low halves.
 2. `smulbb` returns the 32-bit signed product. Note the Q-format doubles: Q15 × Q15 = Q30, so a left shift by 1 gives you Q31.
+
+### Example 2 — One tap of a packed-Q15 stereo FIR
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Layout: each word holds [right | left] in [T | B] (top=31:16, bottom=15:0).
+    @ Pick the LEFT-channel tap with SMULBB (bottom × bottom).
+    ldr     r1, =0x11110001     @ samples: right=0x1111, left=0x0001
+    ldr     r2, =0x22220002     @ coeffs : right=0x2222, left=0x0002
+    smulbb  r0, r1, r2          @ r0 = (int16)0x0001 * (int16)0x0002 = 2
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. The packed word stores right channel in bits 31:16 and left channel in bits 15:0.
+2. `smulbb` selects the **B**ottom of both registers, sign-extends each to 32 bits, and multiplies into a full 32-bit `r0`.
+3. The matching right-channel tap is just `SMULTT` on the same two registers — no extra loads, no shifting.
 
 ## See also
 

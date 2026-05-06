@@ -20,6 +20,8 @@ LDRSH{<cond>}  <Rt>, <label>
 
 Reads 16 bits and **sign-extends** bit 15 to bit 31. The natural way to load `int16_t`.
 
+**When you'd actually use this.** `LDRSH` is for `int16_t` data: signed PCM audio samples, motor-control encoder counts, accelerometer/gyro readings (most IMUs ship 16-bit two's-complement words), or DSP coefficient tables. The sign-extension to 32 bits is what makes a subsequent multiply, add, or compare give the right arithmetic answer. The matching DSP MAC patterns (`smlabb`, `smlad`, `mla` with signed operands) consume signed half-words and they expect inputs that have been brought into registers via `LDRSH`. The alternative — `LDRH` + `SXTH` — burns an extra instruction every time you touch the buffer; in the inner loop of a filter that adds up fast.
+
 ## Operands
 
 | Field   | Type                 | Constraints                              |
@@ -66,6 +68,8 @@ No 16-bit immediate-offset form — immediate `LDRSH` is always 32-bit.
 
 ## Example
 
+### Example 1 — reading int16 PCM audio samples
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -94,6 +98,42 @@ samples:
 2. `ldrsh r2, [r0, #2]` — 32767 (0x7FFF). Bit 15 = 0, R2 = 0x00007FFF.
 3. `ldrsh r4, [r0, r3, lsl #1]` — -32768 (0x8000). Bit 15 = 1, R4 = 0xFFFF8000 (-32768). A plain `LDRH` would produce 0x00008000 (+32768) — that's the trap.
 4. `ldrsh r5, [r0], #2` — streaming int16 read with auto-increment by 2.
+
+### Example 2 — 4-tap FIR multiply-accumulate over int16 samples
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ LDRSH demo 2: 4-tap FIR sum-of-products on int16 samples and coeffs.
+    ldr     r0, =samples
+    ldr     r1, =coeffs
+    movs    r2, #4                  @ tap count
+    movs    r3, #0                  @ accumulator
+fir_loop:
+    ldrsh   r4, [r0], #2            @ next sample (sign-extended)
+    ldrsh   r5, [r1], #2            @ next coefficient
+    mla     r3, r4, r5, r3          @ acc += sample * coeff
+    subs    r2, r2, #1
+    bne     fir_loop
+loop:
+    b       loop
+
+    .align  2
+samples:
+    .hword  -1, 32767, -32768, 100
+coeffs:
+    .hword   1,    -1,      2,   3
+```
+
+**Walkthrough:**
+
+1. `ldrsh r4, [r0], #2` and `ldrsh r5, [r1], #2` — post-indexed signed half-word loads, advancing each pointer by 2 (one `int16_t`). Sign-extension is essential: a sample of −32768 must enter the multiplier as 0xFFFF8000, not 0x00008000.
+2. `mla r3, r4, r5, r3` — multiply-and-accumulate: `r3 = r4*r5 + r3`. With proper sign-extension, the 32-bit product is correctly signed and the accumulator stays consistent.
+3. `subs r2, r2, #1` / `bne fir_loop` — standard tap-count loop tail.
 
 ## See also
 

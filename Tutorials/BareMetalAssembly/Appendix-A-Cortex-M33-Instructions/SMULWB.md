@@ -14,6 +14,8 @@
 SMULWB <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** is Q31-by-Q15 multiplication where the result has to stay in Q31. The instruction multiplies a 32-bit `Rn` by the bottom 16 bits of `Rm`, but only the **top 32 of the 48-bit product** are written, so the implicit `>>16` exactly cancels the Q15 scale and you keep Q31 alignment in one cycle. Killer use: Q31 audio gain control (`output = input * gain.q15`) or the inner step of a Q31 biquad whose coefficients are stored as Q15 to fit a small lookup table. Without `SMULWB` you'd `SXTH` + `SMULL` + `LSR #16` (or `MOV` from the high half) — three instructions instead of one.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -51,6 +53,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — Q31 × Q15 → Q31 (top 32 of 48-bit product)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -70,6 +74,29 @@ loop:
 
 1. `r1` is a Q31 sample, `r2[15:0]` is a Q15 coefficient.
 2. `smulwb` returns bits [47:16] of the 48-bit product, which is the Q31 result of Q31×Q15. This is the building block for fixed-point IIR filters.
+
+### Example 2 — Q15 master volume on a Q31 sample
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Audio gain stage: Q31 sample × Q15 master volume = Q31 sample, single cycle.
+    @ The gain is in the BOTTOM half of r2 (bits 15:0), so use SMULWB.
+    ldr     r1, =0x60000000     @ sample = 0.75 in Q31
+    movw    r2, #0x4000         @ vol    = 0.5  in Q15 (bottom half, bits 15:0)
+    smulwb  r0, r1, r2          @ r0 = (sample * vol) >> 16 ≈ 0x30000000 (0.375 Q31)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. The 48-bit signed product is `0x60000000 * 0x4000 = 0x0001_8000_0000_0000`; bits [47:16] give `0x30000000` — exactly 0.375 in Q31.
+2. The output's Q-format matches the Q31 input automatically — no separate shift step. If your gain table grows to two stereo gains per word (`[r_gain | l_gain]`), switch to `SMULWT` for the right channel without reloading.
 
 ## See also
 

@@ -14,6 +14,8 @@
 USADA8  <Rd>, <Rn>, <Rm>, <Ra>
 ```
 
+**When you'd actually use this** is `USAD8`'s big sibling: same per-byte SAD, but it folds in a 32-bit accumulator so you can chain across an arbitrarily large block with no separate `ADD`. That makes it the inner instruction of every motion-estimation, block-matching, template-matching, and image-difference kernel on M-profile — a 16×16 block match collapses to 64 `USADA8`s (~64 cycles), versus 600+ instructions of scalar `SUB`/`ABS`/`ADD` math. If you only ever learn one DSP-extension instruction for video work, learn this one.
+
 Same per-byte unsigned-absolute-difference sum as `USAD8`, then adds `Ra` to the result. Use it to accumulate SAD across many 4-byte chunks without an extra `ADD`.
 
 ## Operands
@@ -60,6 +62,8 @@ When `Ra = 0b1111` the encoding is `USAD8` instead. 32-bit only.
 
 ## Example
 
+### Example 1 — chained 8-byte SAD via two USADA8s
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +90,46 @@ loop:
 3. Second `usada8 r4, r1, r3, r4` — four more, added on top. After two instructions you have the full 8-byte SAD with no separate `ADD`.
 
 Real motion-estimation kernels unroll this across an 8×8 or 16×16 block — each row costs two `USADA8`s.
+
+### Example 2 — 4×2 block-match metric across two image rows
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Score a 4×2-pixel motion-estimation block: two rows of 4 bytes,
+    @ one 32-bit running SAD. Same idea scales to 16×16 with 32 USADA8s
+    @ — ~32 cycles vs. ~300+ cycles of scalar SUB/ABS/ADD.
+    ldr     r0, =ref_block       @ 8 bytes of reference  (2 rows × 4 px)
+    ldr     r1, =cand_block      @ 8 bytes of candidate
+    movs    r4, #0               @ block-match metric
+    ldr     r2, [r0]             @ ref row 0
+    ldr     r3, [r1]             @ cand row 0
+    usada8  r4, r2, r3, r4       @ r4 += SAD(row0)
+    ldr     r2, [r0, #4]         @ ref row 1
+    ldr     r3, [r1, #4]         @ cand row 1
+    usada8  r4, r2, r3, r4       @ r4 += SAD(row1) → full 4×2 block SAD
+loop:
+    b   loop
+
+    .balign 4
+ref_block:
+    .byte 100, 110, 120, 130
+    .byte 105, 115, 125, 135
+    .balign 4
+cand_block:
+    .byte 102, 108, 121, 128
+    .byte 104, 114, 122, 140
+```
+
+**Walkthrough:**
+
+1. `r4 = 0` is the running SAD for the whole block; forgetting it silently biases every comparison.
+2. Each `usada8 r4, r2, r3, r4` does 4 absolute byte differences + 4 adds in one cycle, then folds in `r4` from the previous row. Two rows = two instructions of arithmetic.
+3. Total work for a 4×2 block: 4 loads + 2 `USADA8`s = ~6 cycles. Unrolled to 16×16 it's 32 `USADA8`s + 64 loads — call it ~100 cycles. The same kernel in scalar C compiles to 600+ instructions and many times more cycles. This is *the* M-profile motion-estimation power tool.
 
 ## See also
 

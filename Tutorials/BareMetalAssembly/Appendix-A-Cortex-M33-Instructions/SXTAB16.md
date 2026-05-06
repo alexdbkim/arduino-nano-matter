@@ -14,6 +14,8 @@
 SXTAB16  <Rd>, <Rn>, <Rm>{, ROR #<amount>}
 ```
 
+**When you'd actually use this** is when you have a packed-byte stream where two of the four lanes are useful and *signed* — typical case is an inter-frame pixel-difference where you want lanes 0 and 2 widened into two 16-bit accumulators in parallel. One `SXTAB16` does two byte-extends and two halfword-adds in a single cycle; the scalar fallback (`SXTB`/`ADD`/`SXTB`/`ADD` with a rotate or shift in between) is four instructions and chews two scratch registers. Pair two `SXTAB16`s — one with `ROR #0`, one with `ROR #8` — to widen *all four* signed bytes of a packed word into four 16-bit lanes across two destination registers.
+
 SIMD version of `SXTAB`. After an optional rotate of `Rm`, take bytes [7:0] and [23:16] in parallel, sign-extend each to 16 bits, and add them to the matching halves of `Rn`. Two byte-to-halfword extracts and two adds, one instruction.
 
 ## Operands
@@ -60,6 +62,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — widening two signed bytes into two halfword accumulators
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -83,6 +87,35 @@ loop:
 2. `sxtab16 r2, r0, r1` — the bottom byte of `r1` (`0x7F` = +127) is sign-extended and added to the bottom halfword of `r0`; byte at bits [23:16] of `r1` (`0xBB` = -69) is sign-extended and added to the top halfword of `r0`. Both half-adds happen in one cycle.
 
 This is the natural way to widen packed signed bytes (think 8-bit audio or 8-bit pixel deltas) into a pair of 16-bit accumulators for further SIMD math.
+
+### Example 2 — signed pixel-difference accumulator across two packed words
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Sum signed pixel deltas (lanes 0 and 2) from two packed-byte words
+    @ into two parallel 16-bit running totals.
+    ldr     r0, =0x00000000      @ two 16-bit lane accumulators (lane0 | lane2)
+    ldr     r1, =0xAA80FF80      @ deltas: lane0 = 0x80 = -128, lane2 = 0xFF = -1
+    sxtab16 r0, r0, r1           @ lane0 += -128, lane2 += -1
+    ldr     r2, =0x55700470      @ deltas: lane0 = 0x70 = +112, lane2 = 0x70 = +112
+    sxtab16 r0, r0, r2           @ lane0 += +112, lane2 += +112
+    @ r0 lane0 = -128 + 112 = -16  (0xFFF0 in halfword)
+    @ r0 lane2 =   -1 + 112 = +111 (0x006F)
+    @ r0 = 0x006F_FFF0
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` holds two signed-halfword running sums; `r1` and `r2` are packed-byte signed delta words from two source rows.
+2. Each `sxtab16` sign-extends `r1[7:0]` → lane 0 and `r1[23:16]` → lane 2 to 16 bits and adds them lane-wise to `r0`. Two byte-widens + two halfword-adds, one cycle.
+3. Doing this scalar-style would be `SXTB`/`ADD`/`LSR #16`/`SXTB`/`ADD` per word — five instructions vs. one, and you'd need a scratch register.
 
 ## See also
 

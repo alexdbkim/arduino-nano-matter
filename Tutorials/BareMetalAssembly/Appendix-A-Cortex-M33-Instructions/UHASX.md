@@ -14,6 +14,8 @@
 UHASX <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this**: `UHASX` is the unsigned, halving cross-add/sub butterfly — useful in magnitude-domain spectral processing (where bins are `uint16`) or in image kernels that combine "summed" and "crossed" pairs of unsigned channels with built-in scaling. The `(a ± b)/2` ensures the result fits back in the same 16-bit lane no matter how big the inputs were. Compared with the manual `ROR #16` + `UADD16`/`USUB16` + `LSR #1` chain, `UHASX` collapses the work to a single cycle with no temporaries.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — Cross add/sub on packed unsigned halfwords
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,32 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `uhasx r0, r1, r2` exchanges the halves of `r2` first, then computes `r0[hi] = r1[hi] + r2[lo]` and `r0[lo] = r1[lo] − r2[hi]`.
 3. Each half result is **logical-shifted right by 1** (unsigned halving) so the answer always fits.
+
+### Example 2 — Scaled magnitude-domain butterfly stage
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Scaled butterfly on unsigned 16-bit spectrum bins:
+    @   r0[hi] = (r1[hi] + r2[lo]) / 2,  r0[lo] = (r1[lo] - r2[hi]) / 2
+    movw    r1, #0x00C0           @ bin a_lo = 0x00C0
+    movt    r1, #0x0080           @ bin a_hi = 0x0080
+    movw    r2, #0x0010           @ b paired with a_hi
+    movt    r2, #0x0020           @ b paired with a_lo
+    uhasx   r0, r1, r2            @ r0[hi]=(0x80+0x10)/2=0x48, r0[lo]=(0xC0-0x20)/2=0x50
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `r1` and `r2` carry pairs of unsigned spectral magnitudes; `r2` is laid out so its halves cross-pair with `r1` during the op.
+2. `uhasx` adds the upper-cross pair, subtracts the lower-cross pair, and `>>1`s each lane in one shot.
+3. Because each lane is `(a + b)/2` or `(a − b)/2`, the result is mathematically guaranteed to fit in 16 bits — no per-stage rescale, no `USAT`. That's exactly the property a multi-stage scaled butterfly chain depends on.
 
 ## See also
 

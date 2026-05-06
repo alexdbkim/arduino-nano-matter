@@ -19,6 +19,8 @@ ADD{<cond>}    <Rd>,  PC,  #<imm>          @ assembles to ADR
 
 The `S` suffix means "set the flags from the result". Without it, flags are untouched.
 
+**When you'd actually use this**: ADD shows up wherever C has a `+` on integers — incrementing a loop counter, walking a pointer (`p + offset`), summing a running accumulator. With `ADDS` you also get a free flag update so you can chain into `BCC`/`BCS` for saturating-math style branches without a separate `CMP`. Pair `ADDS` with `ADC` to build a 64-bit add out of two 32-bit halves; that's the only way to do wide integer arithmetic on a 32-bit core. Forgetting the `S` is the classic bug — plain `ADD` leaves APSR untouched, so a later `BNE` branches on whatever flags happened to be there.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -74,6 +76,8 @@ Outside an IT block, the 16-bit T1 encoding **always** sets flags — `add r0, r
 
 ## Example
 
+### Example 1 — plain ADD vs ADDS for overflow detection
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -99,6 +103,31 @@ loop:
 1. `add r2, r0, r1` — plain add, no `S`, so APSR is untouched even though the result is non-zero.
 2. `adds r4, r3, #1` — `S` form, the sum wraps from `+INT_MAX` to `INT_MIN`, setting **V=1** and **N=1**.
 3. `bvs overflow` — branches because V is set, demonstrating that only the `S` form is useful for follow-up conditional code.
+
+### Example 2 — 64-bit add of (r1:r0) + (r3:r2)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global reset_handler
+    .thumb_func
+reset_handler:
+    ldr     r0, =0xFFFFFFF0     @ A.lo
+    ldr     r1, =0x00000001     @ A.hi
+    ldr     r2, =0x00000020     @ B.lo
+    ldr     r3, =0x00000002     @ B.hi
+    adds    r0, r0, r2          @ low half overflows 32 bits, C=1
+    adc     r1, r1, r3          @ high half: 1 + 2 + carry = 4
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `adds r0, r0, r2` — the low halves' true sum overflows 32 bits, so the result keeps only the low 32 (`0x00000010`) and APSR.C is set to 1 to remember the lost bit.
+2. `adc r1, r1, r3` — the high halves are added together *plus* the captured carry. Drop the `S` from the first instruction and no carry ever appears, so the high half ends up wrong by 1.
+3. The full 64-bit result lives in `r1:r0` = `0x0000000400000010`. This is exactly how `(int64_t) +` is open-coded in the runtime.
 
 ## See also
 

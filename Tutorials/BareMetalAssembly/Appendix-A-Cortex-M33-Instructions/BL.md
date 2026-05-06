@@ -14,6 +14,8 @@
 BL   <label>
 ```
 
+**When you'd actually use this**: `BL` is *the* function-call instruction. Every C function call you read in a disassembly listing is a `BL` (or `BLX` for indirect calls); the compiler picks it because saving the return address in `LR` is free. The thing that bites: the ±16 MB reach. For monolithic Cortex-M firmware that's never an issue, but big linked systems get *long-call veneers* inserted by the linker to bridge longer hops. Also note there's no `BL<cond>` on Cortex-M — to call only sometimes, jump around the `BL` with a `Bcc`, or wrap it in a 1-instruction `IT` block.
+
 `BL` is the standard subroutine-call instruction in Thumb. It writes the return address into `LR` (`r14`) and then branches to `<label>`. There is no conditional `BL<cond>` form on Cortex-M; wrap a `BL` in an `IT` block or jump around it with a `B<cond>` if you need conditional calls.
 
 ## Operands
@@ -53,6 +55,8 @@ There is no 16-bit `BL` encoding. `BL` is always 4 bytes.
 
 ## Example
 
+### Example 1 — leaf doubling subroutine
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -82,6 +86,35 @@ times_two:
 5. `b loop` — only reached after the call returns, demonstrating linkage worked.
 
 If `times_two` itself called another function, it would have to push `LR` first (`push {lr}` on entry, `pop {pc}` on exit) — leaf functions can skip that.
+
+### Example 2 — call a tiny add-one helper
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #41
+    bl      add_one         @ LR = next-PC | 1, jump to add_one
+    @ r0 == 42 here
+loop:
+    b       loop
+
+    .thumb_func
+add_one:
+    adds    r0, r0, #1
+    bx      lr
+```
+
+**Walkthrough:**
+
+1. `movs r0, #41` — argument in `r0` per AAPCS.
+2. `bl add_one` — push the return address into `LR` (Thumb bit forced on) and jump.
+3. `adds r0, r0, #1` — callee increments and leaves the result in `r0`.
+4. `bx lr` — return; PC is taken from `LR & ~1`, Thumb state stays set.
+5. Control falls into `loop` after the call returns, proving the linkage worked.
 
 ## See also
 

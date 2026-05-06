@@ -18,6 +18,8 @@ FPv5-SP only. `.F64` is **not** available on EFR32MG24.
 VMLA.F32 <Sd>, <Sn>, <Sm>      @ Sd = Sd + (Sn * Sm)
 ```
 
+**When you'd actually use this** today is mostly when you specifically need strict-IEEE behaviour that **must round twice** — code ported from older FPv4 cores, bit-exact reproduction of a reference C implementation compiled without `-ffp-contract`, or test vectors that pin down a particular rounded intermediate. For new DSP code the fused `VFMA` is strictly more accurate (one rounding instead of two) at the same throughput, and that's what compilers emit whenever `fma()` semantics are allowed. Reach for `VMLA` only when the legacy round-mul-then-round-add path is the actual specification — otherwise prefer `VFMA` and pocket the half-an-ULP-per-tap precision win.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -54,6 +56,8 @@ APSR untouched; FPSCR cumulative bits may set.
 
 ## Example
 
+### Example 1 — 4-element dot product (legacy two-rounding)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,28 @@ loop:
 
 1. `vmul.f32 s8, s0, s4` — seed the accumulator (avoids needing acc=0).
 2. Three `vmla.f32` — each adds the next product to the running sum. Two roundings per step; for a numerically tighter dot-product use `VFMA`.
+
+### Example 2 — Horner polynomial step `acc = c + acc*x`
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  horner_step
+    .thumb_func
+horner_step:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ One Horner step: new_acc = c + old_acc * x   (two roundings)
+    @ S0 = c (next coefficient, becomes new_acc)
+    @ S1 = old_acc, S2 = x
+    vmla.f32 s0, s1, s2      @ S0 = c + old_acc*x
+    bx       lr
+```
+
+**Walkthrough:**
+
+1. `vmla.f32 s0, s1, s2` — round #1 for `old_acc*x`, round #2 for the add to `c`. An N-degree polynomial therefore eats 2N roundings via `VMLA` versus N via `VFMA`. When the coefficients span many orders of magnitude (think a Chebyshev approximation for `expf`), the doubled error budget can shift the last two bits of the result — visible in unit tests that bit-compare against a reference implementation.
 
 ## See also
 

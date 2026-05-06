@@ -14,6 +14,8 @@
 SHADD8 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this**: `SHADD8` is a four-lane "average packed signed bytes" — exactly what a 1D box-blur on int8 audio or an int8 pixel-row mix needs. Each lane is `(a + b) >> 1` arithmetic-shifted *inside* the add, so the result cannot overflow even when both inputs are at +127 or both at −128. Without `SHADD8`, averaging two int8 vectors means four `SXTB`s, four `ADD`s, four `ASR #1`s, and a repack — about a dozen instructions vs. one cycle here.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — Per-lane add on signed packed bytes
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,31 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `shadd8 r0, r1, r2` treats each register as 4 packed byte lanes and added them lane-by-lane.
 3. Each lane result is **arithmetic-shifted right by 1** so the sum cannot overflow.
+
+### Example 2 — 1D box-blur on a signed int8 sample line
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Average two int8 sample lines (4 samples per word) lane-wise without overflow.
+    movw    r1, #0x4060           @ a0=+0x60, a1=+0x40
+    movt    r1, #0x2030           @ a2=+0x30, a3=+0x20
+    movw    r2, #0xC0E0           @ b0=-0x40, b1=-0x20
+    movt    r2, #0xF0F8           @ b2=-0x10, b3=-0x08
+    shadd8  r0, r1, r2            @ r0[i] = (a[i]+b[i]) >> 1, signed, lane-wise
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. Two packed int8 vectors live in `r1` and `r2`, four samples each.
+2. `shadd8` adds matched lanes in 9-bit precision internally, then arithmetic-shifts each by 1.
+3. Lane 0 computes `(+0x60 + −0x40)/2 = +0x10`; lane 3 computes `(+0x20 + −0x08)/2 = +0x0C`. The `>>1` guarantees every byte fits — even `+127 + +127` becomes `+127`.
 
 ## See also
 

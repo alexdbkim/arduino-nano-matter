@@ -19,6 +19,8 @@ STR{<cond>}  <Rt>, [<Rn>], #<imm>                @ post-indexed
 
 The symmetric partner of [`LDR`](LDR.md). No PC-relative or `STR =const` forms — stores cannot use a literal pool.
 
+**When you'd actually use this**: any time you write a 32-bit value to memory — poking an MMIO peripheral register like `UART->TXDATA` or a GPIO `OUT_SET`/`OUT_CLR` register, pushing a word into a software FIFO ring buffer, or populating a `uint32_t` field in a struct. The address must be word-aligned for Device/Strongly-Ordered memory and (by default) for Normal memory too — peripheral registers in particular will fault hard on a misaligned `STR`. Without `STR` you'd have to fake a 32-bit write with four `STRB`s, which is both slower and wrong for MMIO (peripherals expect a single 32-bit bus transaction, not four byte ones).
+
 ## Operands
 
 | Field   | Type            | Constraints                                                              |
@@ -64,6 +66,8 @@ if wback then R[n] = offset_addr;
 
 ## Example
 
+### Example 1 — Indexed and writeback addressing modes
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -96,6 +100,39 @@ buffer:
 3. `str r1, [r0, r2, lsl #2]` — `r2` is a word index, `lsl #2` scales by 4 — exactly how a C compiler addresses `buf[i]` for a `uint32_t[]`.
 4. `str r1, [r0, #8]!` — pre-indexed: bump base first, then store. The base register is updated permanently.
 5. `str r1, [r0], #4` — post-indexed: store first, advance base. Idiomatic for `*p++ = v` write loops.
+
+### Example 2 — Ring-buffer enqueue with mask wrap
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Enqueue r3 into a 16-slot uint32_t ring buffer.
+    ldr     r0, =ring          @ base of the ring (16 words)
+    ldr     r1, =ring_head     @ &head (uint32_t index)
+    ldr     r2, [r1]           @ head
+    movw    r3, #0xC0DE        @ value to enqueue
+    str     r3, [r0, r2, lsl #2]   @ ring[head] = value
+    adds    r2, r2, #1
+    and     r2, r2, #0x0F      @ head = (head + 1) & 15
+    str     r2, [r1]           @ commit new head
+loop:
+    b       loop
+
+    .data
+    .align  2
+ring:       .space  64
+ring_head:  .word   0
+```
+
+**Walkthrough:**
+
+1. `str r3, [r0, r2, lsl #2]` — scaled register offset: `r2` is a word index, `lsl #2` turns it into a byte offset.
+2. The mask `& 15` cheaply wraps the index when the ring has a power-of-two size — no compare-and-branch needed.
+3. The final `str r2, [r1]` commits the updated head pointer back to memory; in a real driver this would be paired with a `DMB` so a consumer on another exception level sees the data write before the head update.
 
 ## See also
 

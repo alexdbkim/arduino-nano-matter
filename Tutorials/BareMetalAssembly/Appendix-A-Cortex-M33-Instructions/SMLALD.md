@@ -14,6 +14,8 @@
 SMLALD <RdLo>, <RdHi>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — long FIR/IIR loops where the 32-bit accumulator from SMLAD would saturate. Each Q15×Q15 product is up to ~2³⁰, so a 32-bit accumulator can overflow after ~64 taps of full-scale signal. SMLALD widens that to 64 bits, giving headroom for thousand-tap convolutions, audio mixing, and matched filters. Without it you'd be forced to right-shift each product (losing precision) or insert SADD/ADC chains every iteration — roughly 3× the cycle cost.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -58,6 +60,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — Single dual-MAC into 64-bit accumulator
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -80,6 +84,36 @@ loop:
 1. Zero a 64-bit accumulator in `{r1:r0}`.
 2. Load two saturated Q15 lanes into each operand.
 3. `smlald` adds both products into the 64-bit pair. Because the accumulator is 64-bit, you can run thousands of taps without ever needing to saturate — that's the whole point versus SMLAD.
+
+### Example 2 — Long FIR partial sum across 4 taps in r2:r3
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ {r3:r2} = Σ s_i * c_i over 4 taps using two SMLALD instructions.
+    @ A 32-bit accumulator would already be at 2^31 after 2 full-scale taps;
+    @ the 64-bit pair gives ~30 bits of extra headroom.
+    movs    r2, #0              @ RdLo
+    movs    r3, #0              @ RdHi
+    ldr     r0, =0x7FFF7FFF     @ samples s1:s0
+    ldr     r1, =0x7FFF7FFF     @ coeffs  c1:c0
+    smlald  r2, r3, r0, r1      @ {r3:r2} += s0*c0 + s1*c1
+    ldr     r0, =0x7FFF7FFF     @ samples s3:s2
+    ldr     r1, =0x60005FFF    @ coeffs  c3:c2
+    smlald  r2, r3, r0, r1      @ {r3:r2} += s2*c2 + s3*c3
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. The 64-bit pair `{r3:r2}` is zeroed first; `RdLo` and `RdHi` are both inputs *and* outputs of SMLALD.
+2. Each SMLALD adds two Q15×Q15 products plus the previous 64-bit accumulator value — that's 2 taps per instruction with no risk of intermediate saturation.
+3. For a real 1024-tap filter this scales to 512 SMLALDs in a tight loop with `LDR rX,[…],#4` post-increments — exactly what CMSIS-DSP's `arm_fir_q15` does for long kernels.
 
 ## See also
 

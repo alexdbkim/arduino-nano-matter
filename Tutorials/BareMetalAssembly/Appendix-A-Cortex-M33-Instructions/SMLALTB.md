@@ -14,6 +14,8 @@
 SMLALTB <RdLo>, <RdHi>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this:** `SMLALTB` multiplies the **top** half of `Rn` by the **bottom** half of `Rm` and adds the signed 32-bit product into a 64-bit `{RdHi:RdLo}` pair. The 64-bit accumulator is the entire point — a Q15 × Q15 product fits in 30 bits, so a 32-bit accumulator overflows fast in long chains, while 64 bits gives you ~32 bits of headroom and lets you sum millions of taps before clipping. The "TB" mix is perfect for stereo/mixed-stream layouts: e.g. a packed-frame word holding `(left|right)` paired with a packed-gains word holding `(gainL|gainR)` — one instruction routes the left sample into the right-channel bus without any shifting. Without it, you'd hand-shift with `ASR #16` + `SXTH` + `MUL` + `ADDS` + `ADC` per tap — five instructions and a scratch register vs. one.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -57,6 +59,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — single top×bottom MAC seed
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,37 @@ loop:
 
 1. Pack one int16 in `r2[31:16]` and another in `r3[15:0]`.
 2. `smlaltb` does `Rn[31:16] * Rm[15:0]` and adds it to the 64-bit accumulator pair.
+
+### Example 2 — stereo cross-channel mix accumulator
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  stereo_cross_mix
+    .thumb_func
+stereo_cross_mix:
+    @ Frames packed as (Left in top half | Right in bottom half).
+    @ Gains  packed as (gainL in top half | gainR in bottom half).
+    @ We sum Left * gainR -- left signal routed into right bus.
+    @ r0 = frame ptr, r1 = gains ptr (constant), r2 = N frames
+    push    {r4-r6, lr}
+    movs    r3, #0              @ acc lo
+    movs    r4, #0              @ acc hi
+    ldr     r6, [r1]            @ load packed gains once
+1:  ldr     r5, [r0], #4        @ next frame: top=L, bot=R
+    smlaltb r3, r4, r5, r6      @ {r4:r3} += L * gainR
+    subs    r2, r2, #1
+    bne     1b
+    pop     {r4-r6, pc}
+```
+
+**Walkthrough:**
+
+1. Each frame word stores Left in the top half and Right in the bottom half (one `LDR` brings both at once).
+2. `SMLALTB` picks **top of `r5`** (Left) and **bottom of `r6`** (gainR) — exactly the cross-channel pair we want — and adds the product to `{r4:r3}` in a single cycle.
+3. Run this over an entire audio buffer (say 48 kHz × 1 s = 48 000 frames) and the 64-bit accumulator never overflows even at full-scale Q15 input: `48000 × (2^15)^2 ≈ 2^46`, well below 2^63. A 32-bit accumulator would have wrapped after ~256 frames worst case — that's the whole reason `SMLAL*` exists.
+4. Pair this with `SMLALBT` on the same registers to sum Right × gainL into a different accumulator pair, and you've built one half of a 2×2 mixer matrix with two MAC instructions per frame.
 
 ## See also
 

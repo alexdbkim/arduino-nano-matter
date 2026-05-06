@@ -14,6 +14,8 @@
 UADD8 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `UADD8` runs four unsigned byte-lane adds in one cycle, wrapping mod-256 (no saturation). Reach for it when overflow can't happen (small deltas, summing pre-clamped histogram bin quads) or when you actually want wrap-around (hash diffusion). **Each lane sets one `APSR.GE` bit on carry-out**, which `SEL` reads to do per-lane selection — the killer pattern that justifies all these modulo SIMD ops. Vectorized clamp-on-overflow, byte-wise max of two raster lines, and masked blends collapse from ~8 scalar instructions to two using `GE`+`SEL`.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — Per-lane unsigned byte add
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,32 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `uadd8 r0, r1, r2` treats each register as 4 packed byte lanes and added them lane-by-lane.
 3. `APSR.GE` bits flag the lanes whose unsigned add produced a carry-out.
+
+### Example 2 — Sum two histogram bin quads in one cycle
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Merge 4 unsigned histogram-bin bytes from two streams.
+    @ r1 = stream A's 4 bins, r2 = stream B's 4 bins.
+    movw    r1, #0x0203
+    movt    r1, #0x0405
+    movw    r2, #0x0102
+    movt    r2, #0x0304
+    uadd8   r0, r1, r2          @ 4 unsigned byte adds; GE[i]=1 on lanes that overflowed
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `uadd8` does four 8-bit unsigned bin merges per cycle — 4× the work of a scalar `add`.
+2. `APSR.GE[i]` is set on every lane that carried out (true sum > 255). The result lane wrapped mod-256, so `GE` tells you exactly which bins to clamp.
+3. A 2-instruction follow-up — `mvn rsat, #0` then `sel r0, rsat, r0` — would clamp every overflowed bin to `0xFF`, giving a poor-man's `UQADD8` that you control yourself.
 
 ## See also
 

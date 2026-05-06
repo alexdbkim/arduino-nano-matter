@@ -14,6 +14,8 @@
 DSB {<option>}         @ option defaults to SY
 ```
 
+**When you'd actually use this** — `DSB` is `DMB` with teeth: it *stalls execution* until every preceding memory access has actually completed (writes drained to the bus, reads delivered). Required after writing system control registers — `MPU_CTRL`, `SCB->VTOR`, `NVIC->ISER`, `SCB->AIRCR` — to guarantee the reconfiguration is in effect before subsequent code runs. Required before `WFI`/`WFE` when the wake source was just armed via MMIO, otherwise the arming write may still be in the write buffer when the core sleeps and the wake never arrives. Versus `DMB` it costs more cycles but is the right choice when you need *completion*, not just *ordering*. Pair it with `ISB` whenever the system-register change also affects how subsequent instructions execute (enabling the MPU, changing CONTROL, changing VTOR).
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -51,6 +53,8 @@ No 16-bit form.
 
 ## Example
 
+### Example 1 — pend PendSV from thread code, then sleep
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,38 @@ loop:
 4. `wfi` — sleep until PendSV (or any other IRQ) fires.
 
 Use `DSB` whenever a memory write is the *trigger* for something architectural: enabling the MPU, kicking a DMA, posting an NVIC pend bit, or arming a sleep. It's also required after `SCB->VTOR` writes, before invoking the new vector table.
+
+### Example 2 — relocate the vector table (DSB then ISB)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Move the vector table into RAM and switch to it
+    ldr     r0, =0xE000ED08         @ SCB->VTOR
+    ldr     r1, =new_vectors
+    str     r1, [r0]                @ install new VTOR
+    dsb                             @ ensure SCB sees the write
+    isb                             @ refetch with the new vector base
+    @ from here, any exception uses new_vectors
+loop:
+    b   loop
+
+    .section .rodata
+    .balign 512
+new_vectors:
+    .word 0x20008000                @ initial MSP
+    .word reset_handler + 1         @ Reset
+```
+
+**Walkthrough:**
+
+1. `str r1, [r0]` — write the new VTOR.
+2. `dsb` — *do not skip*. Without it the SCB write may still be in the write buffer when the next exception fires; the CPU could still vector through the old table.
+3. `isb` — flush the prefetch so any subsequent exception that the pipeline already started speculating about uses the new vector base. The `DSB; ISB` pair is the canonical recipe after every system-register change that affects how subsequent code or exceptions run. `DMB` would be wrong here: it orders memory but doesn't wait for the SCB write to complete.
 
 ## See also
 

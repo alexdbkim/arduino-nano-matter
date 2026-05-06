@@ -14,6 +14,8 @@
 UQSAX <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `UQSAX` mirrors `UQASX`: **top half of result = top half of `Rn` MINUS bottom half of `Rm` (floor-zero); bottom half of result = bottom half of `Rn` PLUS top half of `Rm` (clamp 0xFFFF)**. It's the partner instruction in any unsigned cross-lane butterfly — for example the "diff on hi, sum on lo" half of a packed mid-side encoder over unsigned 16-bit samples, or asymmetric mixing of two packed sensor channels where one direction must clamp at zero and the other at the unsigned max. Without `UQSAX` the same shuffle costs 3–4 instructions and a manual clamp pair.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-halfword unsigned cross subtract/add
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,34 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `uqsax r0, r1, r2` exchanges the halves of `r2` first, then computes `r0[hi] = r1[hi] − r2[lo]` and `r0[lo] = r1[lo] + r2[hi]`.
 3. Each half is then **saturated** to the unsigned 16-bit range `[0, 65535]`.
+
+### Example 2 — unsigned cross-lane mid-side encoder step
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Mirror of uqasx: hi = uqsat(Rn_hi - Rm_lo), lo = uqsat(Rn_lo + Rm_hi).
+    @ Useful as the "diff on top, sum on bottom" cross half of an unsigned
+    @ packed encoder when channels arrive swapped between Rn and Rm.
+    movw    r0, #0x3000         @ Rn lo
+    movt    r0, #0xC000         @ Rn hi
+    movw    r1, #0x4000         @ Rm lo
+    movt    r1, #0x2000         @ Rm hi
+    uqsax   r2, r0, r1          @ hi = uqsat(0xC000 - 0x4000) = 0x8000
+                                @ lo = uqsat(0x3000 + 0x2000) = 0x5000
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` and `r1` each pack two unsigned 16-bit channels; `uqsax` does the cross "subtract on hi, add on lo" with independent unsigned saturation.
+2. The high lane gives `0x8000` (no clamp needed); the low lane gives `0x5000` (no clamp needed). Had the subtract gone negative the hi lane would floor at `0`; had the add overflowed `0xFFFF` the lo lane would saturate.
+3. Without `uqsax` the same shuffle is `PKHBT`/`PKHTB` + `UQSUB16` + `UQADD16`-equivalent — multiple cycles versus one.
 
 ## See also
 

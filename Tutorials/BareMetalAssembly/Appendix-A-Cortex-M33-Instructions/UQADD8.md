@@ -14,6 +14,8 @@
 UQADD8 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `UQADD8` is the workhorse for *unsigned* packed-byte saturation. The textbook example is RGBA pixel arithmetic: brighten a pixel by adding a constant tint to all four channels in one shot, or alpha-compose two pre-multiplied colours, with the per-channel ceiling of 255 enforced automatically. Equally good for 4-channel 8-bit accumulators (e.g. histogram buckets in a 32-bit word) where you must never wrap past 0xFF. Without `UQADD8`, an 8-bit RGBA blend with saturation needs four separate `UXTB` / `UQADD` / `STRB` sequences — about 8 cycles instead of 1.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-byte unsigned saturating add
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,33 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `uqadd8 r0, r1, r2` treats each register as 4 packed byte lanes and added them lane-by-lane.
 3. Each lane is then **saturated** to the unsigned `8`-bit range — no wrap-around, and `APSR.Q` is **not** updated.
+
+### Example 2 — RGBA pixel saturating brighten
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Saturating add of two RGBA pixels (R,G,B,A packed as 4 unsigned bytes).
+    @ r0 = pixel       (e.g. 0xFF80C040 -> A=0xFF, R=0x80, G=0xC0, B=0x40)
+    @ r1 = brighten dt (e.g. 0x00404040 -> add +0x40 to R,G,B; alpha untouched)
+    movw    r0, #0xC040
+    movt    r0, #0xFF80
+    movw    r1, #0x4040
+    movt    r1, #0x0040
+    uqadd8  r2, r0, r1          @ each channel clamps at 0xFF, no wrap
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` holds an RGBA pixel as four unsigned bytes; `r1` is a per-channel additive tint.
+2. `uqadd8` adds all four channels in one cycle, each clamped at `0xFF`, so a near-white pixel can't wrap to dark when overdriven.
+3. The non-SIMD path (`UXTB` × 4 + scalar `UQADD` × 4 + repack) costs ~8 cycles for what `uqadd8` does in 1 — meaningful when shading a whole framebuffer.
 
 ## See also
 

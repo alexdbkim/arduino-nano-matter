@@ -14,6 +14,9 @@
 VRINTM.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you need the floor of a float as another float — `floorf(x)` in a single instruction with the result still on the FPU side. Same **M = Minus-infinity = floor** mnemonic as [VCVTM](VCVTM.md). The classic use is the always-non-negative fractional part: `frac = x - VRINTM(x)` is in `[0, 1)` even for negative `x` — exactly what phase accumulators, texture interpolation, and table-lookup-with-linear-interpolation want. Without it you'd call libm `floorf` (dozens of cycles) or branch on sign yourself.
+
+
 Unconditional. The float→float equivalent of `floorf`.
 
 ## Operands
@@ -54,6 +57,9 @@ Independent of `FPSCR.RMode`.
 
 ## Example
 
+
+### Example 1 — floor() in one instruction (float result)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -85,6 +91,29 @@ loop:
 
 This is the part that bites people: for negative inputs, `floorf` and "truncate"
 disagree by one. Use [VRINTZ](VRINTZ.md) if you want truncation.
+
+### Example 2 — always-non-negative fractional part: frac = x - floor(x)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  frac_pos
+    .thumb_func
+frac_pos:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ s0 = input float; return frac in [0, 1) regardless of sign
+    vrintm.f32 s1, s0             @ s1 = floor(s0)
+    vsub.f32   s0, s0, s1         @ s0 = s0 - floor(s0) = frac in [0,1)
+    bx         lr
+```
+
+**Walkthrough:**
+
+1. `vrintm.f32 s1,s0` produces the floor as a float — for `s0 = -0.25`, `s1 = -1.0`.
+2. `vsub.f32 s0,s0,s1` yields `-0.25 - (-1.0) = 0.75`, the always-non-negative fractional part.
+3. Phase accumulators in NCOs, table-lookup-with-interpolation, and texture wrap-around all want this version; the [VRINTZ](VRINTZ.md) version gives a *signed* fract instead.
 
 ## See also
 

@@ -14,6 +14,8 @@
 UQASX <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `UQASX` is the unsigned cousin of `QASX`. Lane layout: **top half of result = top half of `Rn` PLUS bottom half of `Rm` (clamped at 0xFFFF); bottom half of result = bottom half of `Rn` MINUS top half of `Rm` (clamped at 0)**. Useful when you're doing complex-style cross arithmetic on unsigned packed 16-bit data — think 2D unsigned vector cross-mix, dual-channel sensor fusion where you add one cross-coupling and subtract the other, or a fixed-point algorithm operating on positive Q15 magnitudes. Without `UQASX`, the same job is a `PKHBT` + `UQADD16` + `UQSUB16` style sequence — multiple cycles versus one.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-halfword unsigned cross add/subtract
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -78,6 +82,33 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `uqasx r0, r1, r2` exchanges the halves of `r2` first, then computes `r0[hi] = r1[hi] + r2[lo]` and `r0[lo] = r1[lo] − r2[hi]`.
 3. Each half is then **saturated** to the unsigned 16-bit range `[0, 65535]`.
+
+### Example 2 — unsigned 2D vector cross-mix with floor-zero
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Packed unsigned (X,Y) vectors in r0 and r1: hi = Y, lo = X.
+    @ uqasx mixes Y_a with X_b on top (clamp 0xFFFF) and X_a with -Y_b on
+    @ bottom (clamp 0).  Useful in unsigned 2D fusion / shear-like steps.
+    movw    r0, #0x4000         @ X_a = 0x4000
+    movt    r0, #0xF000         @ Y_a = 0xF000
+    movw    r1, #0x2000         @ X_b = 0x2000
+    movt    r1, #0x8000         @ Y_b = 0x8000
+    uqasx   r2, r0, r1          @ hi = uqsat(Y_a + X_b), lo = uqsat(X_a - Y_b)
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` packs `Y_a` (high) and `X_a` (low); `r1` packs `Y_b` and `X_b`.
+2. `uqasx` produces `r2_hi = uqsat(0xF000 + 0x2000) = 0xFFFF` (clamped at the unsigned 16-bit max) and `r2_lo = uqsat(0x4000 − 0x8000) = 0` (floored at zero).
+3. The independent per-lane saturation means the saturating-high lane can't bleed into the floored-low lane — replacing this single instruction with `UXTH`/`UQADD`/`UQSUB`/repack would cost about 5 cycles.
 
 ## See also
 

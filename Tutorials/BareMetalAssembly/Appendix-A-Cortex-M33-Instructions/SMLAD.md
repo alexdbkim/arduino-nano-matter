@@ -14,6 +14,8 @@
 SMLAD <Rd>, <Rn>, <Rm>, <Ra>
 ```
 
+**When you'd actually use this** — every serious FIR / convolution / dot-product inner loop on Cortex-M33. SMLAD does **two** 16×16 multiplies *and* one 32-bit accumulate in a single cycle, so a Q15 FIR runs at roughly **0.5 cycle per tap**. Without it you'd need two `SMULBB`/`SMULTT` plus an `ADD` (~4–6 cycles per tap, an order of magnitude slower). CMSIS-DSP's `arm_fir_q15` is built on top of this exact opcode, and every Bluetooth-audio decoder and biquad chain on the Nano Matter's EFR32MG24 leans on it.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -56,6 +58,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — Single dual-MAC step (2 FIR taps in one instruction)
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -79,6 +83,46 @@ loop:
 1. `movs r0, #0` — clear the FIR accumulator.
 2. `ldr r1, =…` / `ldr r2, =…` — pack two Q15 samples and two Q15 coefficients into 32-bit lanes (top half = index 1, bottom half = index 0).
 3. `smlad r0, r1, r2, r0` — one cycle does **both** taps: `r0 += s0·c0 + s1·c1`. This is the heart of any FIR/dot-product loop on Cortex-M.
+
+### Example 2 — Unrolled 8-tap FIR inner body (4 SMLADs = 8 taps)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ 8-tap Q15 FIR body: 8 samples × 8 coefficients in 4 SMLAD instructions.
+    @ r4 -> sample buffer, r5 -> coefficient buffer, r0 = accumulator.
+    ldr     r4, =samples
+    ldr     r5, =coeffs
+    movs    r0, #0
+    ldr     r1, [r4], #4        @ s1:s0
+    ldr     r2, [r5], #4        @ c1:c0
+    smlad   r0, r1, r2, r0      @ taps 0..1
+    ldr     r1, [r4], #4        @ s3:s2
+    ldr     r2, [r5], #4        @ c3:c2
+    smlad   r0, r1, r2, r0      @ taps 2..3
+    ldr     r1, [r4], #4
+    ldr     r2, [r5], #4
+    smlad   r0, r1, r2, r0      @ taps 4..5
+    ldr     r1, [r4], #4
+    ldr     r2, [r5], #4
+    smlad   r0, r1, r2, r0      @ taps 6..7
+loop:
+    b   loop
+
+    .align 2
+samples: .word 0x00020001, 0x00040003, 0x00060005, 0x00080007
+coeffs:  .word 0x00010001, 0x00010001, 0x00010001, 0x00010001
+```
+
+**Walkthrough:**
+
+1. `ldr r1,[r4],#4` post-increments through pre-packed `[s_{k+1}:s_k]` halfword pairs; same for coefficients via `r5`.
+2. Each `smlad` folds **two** taps into the running 32-bit sum, so 4 SMLADs cover an 8-tap kernel.
+3. Total inner-loop cost: 8 LDRs + 4 SMLADs ≈ 12 cycles for 8 taps — about **1.5 cycles per tap**, including memory traffic. The same loop without SMLAD would be 32+ cycles.
 
 ## See also
 

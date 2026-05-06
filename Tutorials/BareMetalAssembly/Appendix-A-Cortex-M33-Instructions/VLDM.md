@@ -16,6 +16,8 @@ VLDMDB <Rn>!,   {<Sx>-<Sy>}     @ decrement-before; writeback mandatory
 VLDM   <Rn>{!}, {<Sx>-<Sy>}     @ alias for VLDMIA
 ```
 
+**When you'd actually use this** — VLDM moves *several* consecutive FPU registers in or out in a single instruction. Three real-world settings: (1) bulk register save/restore in an RTOS context switch when you aren't relying on lazy FPU stacking; (2) DMA-style transfer of an N-element vector or filter-tap block from RAM into the register file before a DSP kernel; (3) fast restore of a saved math frame. Compared to a sequence of `VLDR`s, VLDM is one instruction, encodes the length compactly, and the core can pipeline the burst.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -61,6 +63,8 @@ if writeback:
 
 ## Example
 
+### Example 1 — load a 6-element vector with and without writeback
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -90,6 +94,43 @@ vec:
 4. `loop: b loop` — park.
 
 This is the part that bites people: the register list must be **consecutive** (`{s0-s3}`, never `{s0, s2}`) and **ascending**, and the count is encoded in the instruction — it's not a runtime length. `VLDMDB` (decrement-before) requires `!` because non-writeback DB makes no architectural sense.
+
+### Example 2 — load four taps and four samples for a dot product
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VLDM demo 2: 4-tap FIR step — load taps and samples in two bursts, then FMAC.
+    ldr      r0, =taps
+    ldr      r1, =samples
+    vldmia   r0, {s0-s3}          @ S0..S3 = taps[0..3]
+    vldmia   r1, {s4-s7}          @ S4..S7 = samples[0..3]
+    vmul.f32 s8, s0, s4           @ S8  = t0*x0
+    vfma.f32 s8, s1, s5           @ S8 += t1*x1
+    vfma.f32 s8, s2, s6           @ S8 += t2*x2
+    vfma.f32 s8, s3, s7           @ S8 += t3*x3 (one FIR output sample)
+loop:
+    b   loop
+
+    .align 2
+taps:    .float 0.25, 0.25, 0.25, 0.25
+samples: .float 1.0, 2.0, 3.0, 4.0
+```
+
+**Walkthrough:**
+
+1. Two `vldmia` bursts pull eight floats into the register file in two instructions; the DSP equivalent of `for (i=0;i<4;i++) load(...)` collapsed to two memory transactions.
+2. `vmul.f32 s8, s0, s4` seeds the accumulator with the first product.
+3. Three `vfma.f32` instructions — fused multiply-add — fold in the remaining three taps without any rounding between steps. Total: 4 multiplies, 3 adds, one rounded result.
+4. `loop: b loop` — park.
+
+This pattern is why VLDM exists: filling the register file for a kernel that runs entirely out of registers, with no per-element memory traffic during the math.
 
 ## See also
 

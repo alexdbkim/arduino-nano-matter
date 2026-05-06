@@ -15,6 +15,9 @@ VCVTN.S32.F32   <Sd>, <Sm>
 VCVTN.U32.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you want the IEEE-754 default round-to-nearest-even (banker's rounding) for a float→int cast, without disturbing `FPSCR`. The mnemonic: **N = Nearest, ties to eveN** — 2.5→2, 3.5→4. Typical contexts: bias-free histogram-bin assignment for symmetric-noise signals, statistical accumulators where alternating-up-and-down on ties cancels over time, and DSP quantisation where the half-tie bias of `VCVTA` would creep in over millions of samples. Without `VCVTN` you'd have to program `FPSCR.RMode` and use [VCVTR](VCVTR.md), or open-code the parity check yourself.
+
+
 Unconditional. This is IEEE-754 "roundTiesToEven" — the FPU reset default.
 
 ## Operands
@@ -56,6 +59,9 @@ Independent of `FPSCR.RMode`.
 
 ## Example
 
+
+### Example 1 — ties resolve to the EVEN neighbour
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +92,29 @@ This is the part that bites people: half the time `VCVTN` rounds 0.5 up, half th
 time it rounds it down. That's intentional — RNE eliminates the upward bias of
 "always round 0.5 away" and is the IEEE-754 default. Use [VCVTA](VCVTA.md) if you
 want `2.5 → 3` and `3.5 → 4`.
+
+### Example 2 — bias-free histogram bin assignment (banker's rounding)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  bin_assign
+    .thumb_func
+bin_assign:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ s0 = sample * inv_bin_width (already scaled)
+    vcvtn.s32.f32 s1, s0          @ s1 = roundeven(s0)
+    vmov          r0, s1
+    bx            lr
+```
+
+**Walkthrough:**
+
+1. The caller has pre-multiplied the raw sample by `1/bin_width`, so `s0` lands near integer bin centres.
+2. `vcvtn.s32.f32 s1,s0` resolves any 0.5 ties toward the *even* bin — over millions of symmetric-noise samples, ups and downs cancel out and there's no upward bias.
+3. Use [VCVTA](VCVTA.md) instead if you actually want 0.5 to always round up in magnitude.
 
 ## See also
 

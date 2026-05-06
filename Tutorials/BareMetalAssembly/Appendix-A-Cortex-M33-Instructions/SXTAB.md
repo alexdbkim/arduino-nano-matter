@@ -14,6 +14,8 @@
 SXTAB  <Rd>, <Rn>, <Rm>{, ROR #<amount>}
 ```
 
+**When you'd actually use this** — any time you're walking a packed byte stream of *signed* samples (8-bit audio deltas, signed accelerometer axes, motion-vector components) and want a running 32-bit total. `SXTAB` collapses the two-instruction `SXTB tmp, src` + `ADD acc, acc, tmp` sequence into one cycle and frees the scratch register. The rotate operand even lets you pick lane 0/1/2/3 of a packed-byte word without a separate shift, so a four-byte signed accumulation becomes four `SXTAB`s with `ROR #0/8/16/24` and no other arithmetic.
+
 Take the bottom byte of `Rm` (after an optional `ROR` of 0/8/16/24 bits), sign-extend it to 32 bits, then add it to `Rn`. One instruction = "extract a signed byte and accumulate it".
 
 ## Operands
@@ -57,6 +59,8 @@ When `Rn = 0b1111` the encoding becomes `SXTB`. 32-bit only.
 
 ## Example
 
+### Example 1 — four-byte signed-byte running sum via lane rotation
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -81,6 +85,40 @@ loop:
 2. Each `sxtab` rotates `r0` so a different byte lands in bits [7:0], sign-extends it to 32 bits, and adds it to `r1`. Without `SXTAB` you'd need `LSL`/`ASR` (or `SXTB` + `ADD`) per byte.
 
 `SXTAB` is the single-byte cousin of `SXTAB16`. Use this for serial byte streams; use `SXTAB16` when two bytes can be processed in parallel.
+
+### Example 2 — accelerometer signed-byte bias accumulator
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Walk a buffer of signed 8-bit accelerometer samples and sum them
+    @ into a 32-bit bias-tracker. LDRB returns an unsigned byte, but
+    @ SXTAB re-interprets it as signed when adding.
+    ldr     r0, =sample_buf     @ pointer to N signed bytes
+    movs    r1, #4              @ N = 4 samples
+    movs    r2, #0              @ signed running sum
+1:
+    ldrb    r3, [r0], #1        @ fetch raw byte (zero-extended by LDRB)
+    sxtab   r2, r2, r3          @ ... but treat it as signed and accumulate
+    subs    r1, r1, #1
+    bne     1b
+loop:
+    b   loop
+
+    .balign 4
+sample_buf:
+    .byte 0x80, 0x7F, 0xFE, 0x01     @ -128, +127, -2, +1  →  sum = -2
+```
+
+**Walkthrough:**
+
+1. `ldrb` always zero-extends, so naïvely `ADD r2, r2, r3` would treat `0x80` as +128 instead of −128 — silent bias bug.
+2. `sxtab r2, r2, r3` takes the low byte of `r3`, sign-extends it to 32 bits, and adds in one cycle. No scratch register, correct sign.
+3. After four iterations `r2 = -128 + 127 + -2 + 1 = -2`. Replace the `ldrb`/`sxtab` pair with `ldrsb` + `add` and you get the same answer in two instructions instead of two — but `sxtab` shines when the byte is already in a register (e.g. extracted from a packed word with `ROR`).
 
 ## See also
 

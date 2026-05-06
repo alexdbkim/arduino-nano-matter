@@ -14,6 +14,8 @@
 QSUB8 <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `QSUB8` is the signed lane-wise saturating subtract on four packed bytes: ideal for *signed* pixel differences (motion-detection deltas where you actually want to keep the sign), four-channel 8-bit audio differencing, or computing per-lane error signals in a low-bit-depth DSP loop. Each lane independently clamps to `[−128, +127]`, so a runaway delta can't wrap a channel. Without `QSUB8` you'd `SXTB` each lane, scalar `QSUB`, re-pack — ~8 cycles versus 1.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — minimal packed-byte signed saturating subtract
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -77,6 +81,32 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `qsub8 r0, r1, r2` treats each register as 4 packed byte lanes and subtracted them lane-by-lane.
 3. Each lane is then **saturated** to the signed `8`-bit range — no wrap-around, but `APSR.Q` is **not** updated.
+
+### Example 2 — signed pixel-row delta for motion detection
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Compute signed lane-wise differences of two 4-pixel rows (signed 8-bit).
+    @ r0 = current row , r1 = previous row, both packed as 4 signed bytes.
+    movw    r0, #0x4020
+    movt    r0, #0x60F0         @ row N
+    movw    r1, #0x3030
+    movt    r1, #0x5010         @ row N-1
+    qsub8   r2, r0, r1          @ signed lane-wise (curr - prev), each clamped
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `r0` and `r1` carry four packed signed 8-bit pixel samples (e.g. high-pass filtered grayscale).
+2. `qsub8` produces a signed delta per lane in one cycle; any lane whose difference would exceed `+127` or `−128` is clamped, so a single bright impulse can't poison the result.
+3. The signed result is what feeds a sign-aware motion-direction estimator; the alternative (`SXTB` × 4 + scalar `QSUB` × 4 + repack) is ~8 cycles versus 1.
 
 ## See also
 

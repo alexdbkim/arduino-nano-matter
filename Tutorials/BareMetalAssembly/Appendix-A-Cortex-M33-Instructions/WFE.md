@@ -14,6 +14,8 @@
 WFE
 ```
 
+**When you'd actually use this** — `WFE` is `WFI`'s richer cousin: it sleeps until the *Event Register* is set, which happens via `SEV` from another context, on certain peripheral events, or — with `SCR.SEVONPEND=1` — on any IRQ pending even if masked by `PRIMASK`. The textbook use is a spin-then-sleep loop on a shared flag: re-check the predicate after `WFE` because spurious wakes are legal. Versus `WFI`, `WFE` lets you build lock-free wait queues that don't depend on the scheduler taking an actual exception, which matters when you hold higher priority than the producer's ISR. The single-core Nano Matter doesn't get the SMP "wake the other CPU" benefit, but `SEVONPEND` plus `WFE` is still the lowest-power way to poll for a pended IRQ.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ Never updates flags.
 
 ## Example
 
+### Example 1 — spin-then-sleep on a producer flag
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +90,35 @@ g_flag: .word 0
 4. After waking, loop and re-check the flag — WFE can wake spuriously, so always re-test the predicate.
 
 The Cortex-M33 in the Nano Matter is single-core, so the classic SMP "wake the other CPU" use case doesn't apply. WFE is still useful here as a low-power spin: set `SCR.SEVONPEND = 1` and WFE wakes on any pending IRQ even when masked — handy for polling loops without burning current.
+
+### Example 2 — low-power IRQ polling via SEVONPEND
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Enable SEVONPEND, then park in WFE — wakes on any IRQ pending,
+    @ even if PRIMASK has it masked. Lowest-current polling pattern.
+    ldr     r0, =0xE000ED10         @ SCB->SCR
+    ldr     r1, [r0]
+    orrs    r1, r1, #0x10           @ SEVONPEND = 1
+    str     r1, [r0]
+    dsb
+    isb
+1:  wfe                             @ sleep until any IRQ pends
+    b       1b
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. Set `SCR.SEVONPEND` so a pended IRQ generates an event regardless of `PRIMASK`.
+2. `dsb`/`isb` — make sure the SCR write is in effect before we sleep on its semantics.
+3. `wfe` — sleeps until the event arrives. With `PRIMASK=1` you can sample IRQ state in the foreground without ever taking the exception, drawing minimal current the whole time.
 
 ## See also
 

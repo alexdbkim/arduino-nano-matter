@@ -14,6 +14,8 @@
 USAD8  <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `USAD8` is the single most powerful integer instruction on Cortex-M33 for video and image work: in *one* cycle it computes the **sum of absolute differences across four packed bytes**, the literal kernel of motion-estimation block matching, optical-flow patch matching, template matching, perceptual hashing, and most image-similarity scores. The scalar equivalent is four `SUB`s, four conditional negates, and three `ADD`s — roughly twelve cycles plus scratch registers. Combined with `USADA8`, a 16×16 motion-estimation block match is ~64 instructions on M33; the same thing in pure C/scalar assembly is 600+. If you're porting a video codec inner loop to M-profile, this is the instruction that decides whether the project is feasible.
+
 Treats `Rn` and `Rm` as four unsigned bytes each, computes `|n[i] - m[i]|` per lane, and sums all four absolute differences into `Rd`.
 
 ## Operands
@@ -59,6 +61,8 @@ There is no 16-bit Thumb encoding.
 
 ## Example
 
+### Example 1 — four-pixel SAD between two image rows
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -81,6 +85,38 @@ loop:
 2. `usad8 r2, r0, r1` — for each byte lane, take the unsigned absolute difference, then sum all four. `r2 = 15`. This single instruction replaces a four-iteration loop with subtract/abs/accumulate.
 
 This is the workhorse of block-matching motion search: smaller SAD = better match.
+
+### Example 2 — single-row block-match metric from memory
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Real-world shape: load one 4-pixel reference row and one 4-pixel
+    @ candidate row from memory, score the match in one instruction.
+    ldr     r0, =ref_row         @ pointer to reference luma row (4 bytes)
+    ldr     r1, =cand_row        @ pointer to candidate row at (mvx, mvy)
+    ldr     r2, [r0]             @ four reference bytes packed
+    ldr     r3, [r1]             @ four candidate bytes packed
+    usad8   r4, r2, r3           @ r4 = |r0-c0| + |r1-c1| + |r2-c2| + |r3-c3|
+    @ r4 = 2 + 2 + 1 + 2 = 7  → small SAD = good match
+loop:
+    b   loop
+
+    .balign 4
+ref_row:   .byte 100, 110, 120, 130
+    .balign 4
+cand_row:  .byte 102, 108, 121, 128
+```
+
+**Walkthrough:**
+
+1. The two `LDR`s pull a 4-byte pixel row from each frame in one memory access apiece — packed-byte layout matches what `USAD8` expects natively.
+2. `usad8 r4, r2, r3` does four `|a-b|` and three adds in a single cycle. In C this would be `for (int i=0;i<4;i++) sad += abs(ref[i]-cand[i]);` — ~12 cycles of subtract/branch/abs/accumulate, plus loop overhead.
+3. Compare `r4` against the best-so-far across many candidate rows; the lowest SAD wins. Scale this idea to 16×16 with `USADA8` and you have the inner loop of an H.264-class motion estimator on a Cortex-M33.
 
 ## See also
 

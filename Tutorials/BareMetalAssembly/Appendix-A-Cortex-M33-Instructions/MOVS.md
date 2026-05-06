@@ -15,6 +15,8 @@ MOVS  <Rd>, <Rm>          @ register form  — sets N, Z (C from shifter if T3)
 MOVS  <Rd>, #<imm>        @ immediate form — sets N, Z, and possibly C
 ```
 
+**When you'd actually use this** is when a copy doubles as a compare-with-zero. `MOVS rN, rM` updates N and Z, so it's the canonical way to kick off a chain of conditional code (`beq`, `bmi`, etc.) without an explicit `CMP`. Compilers emit it for assignments where the result is immediately tested, and for early loop-init where the freshly written value's sign or zeroness matters. Stay with plain `MOV` (no `S`) inside an `IT` block or when you've already set the flags upstream and want to keep them.
+
 `MOVS` is the flag-setting sibling of [`MOV`](MOV.md). Same data path, different `S` bit in the encoding.
 
 ## Operands
@@ -62,6 +64,8 @@ This is the part that bites people: 16-bit `MOVS Rd, Rm` *must* sit outside an `
 
 ## Example
 
+### Example 1 — Move and inspect Z flag
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -87,6 +91,32 @@ loop:
 3. `movs r2, r1` — copies R1 to R2 and refreshes N/Z from the value.
 4. `movs r3, #0x80000000` — uses the 32-bit modified-immediate; N becomes 1.
 5. `beq never_taken` — branches on the Z flag the previous `movs` left behind, illustrating that `MOVS` is genuinely a compare-with-zero in disguise.
+
+### Example 2 — Counter init and zero-check fall-through
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #4              @ counter = 4 (and Z=0)
+1:  subs    r0, r0, #1          @ flags from each subtract
+    bne     1b                  @ uses Z that subs produced
+    movs    r1, #0              @ Z=1 — gates the next branch
+    beq     done                @ taken because movs just set Z
+done:
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `movs r0, #4` — initialise the loop counter and clear Z in one go.
+2. `subs/bne` — the loop body iterates four times until `r0` reaches 0.
+3. `movs r1, #0` — drops a zero into r1 *and* sets Z=1, so the immediate `beq` is taken without an explicit `cmp`.
+4. This is exactly the pattern the compiler emits for `if (!(x = 0)) ...`-style assignments-as-conditions.
 
 ## See also
 

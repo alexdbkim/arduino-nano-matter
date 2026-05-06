@@ -14,6 +14,8 @@
 SVC #<imm8>            @ imm8 = 0..255, available to the handler in the instruction stream
 ```
 
+**When you'd actually use this** — `SVC` is the canonical user-mode → privileged-mode entry point: an unprivileged thread executes `SVC #n`, the SVCall exception fires, and `SVC_Handler` runs in privileged mode with the caller's `R0..R3` already on the stack. RTOSes (FreeRTOS, Zephyr) use it to deliver kernel services like `xQueueSend` from unprivileged tasks, and bare-metal firmware uses it to expose a syscall ABI between an application image and a privileged "kernel" image. The immediate is *not* delivered in a register — the handler reads `[stacked_PC] - 2` to recover it. Beware: if SVCall priority is lower than current execution priority (e.g. you're already in an ISR), the SVC escalates to HardFault — which is why `SVC` is rare from inside an ISR.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -54,6 +56,8 @@ No 32-bit form.
 
 ## Example
 
+### Example 1 — syscall #1 with an immediate-decoding handler
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -89,6 +93,34 @@ SVC_Handler:
 3. Modifying the stacked R0 changes the value the caller sees in R0 after `bx lr` pops the frame — this is how syscalls return values on Arm-M.
 
 This is the part that bites people: if SVCall priority is set lower than the priority you're currently running at, the SVC will *escalate to HardFault*. Don't call `SVC` from inside an ISR unless you've done the priority math.
+
+### Example 2 — FreeRTOS-style "start scheduler" trampoline
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .global  SVC_Handler
+    .thumb_func
+reset_handler:
+    @ Bootstrap the kernel: SVC #0 traps into the privileged starter
+    @ which sets up PSP/CONTROL and jumps to the first task.
+    svc     #0                      @ kernel takes over
+    b       .                       @ never returns
+loop:
+    b   loop
+
+    .thumb_func
+SVC_Handler:
+    @ Demo: real handler would dispatch on imm8 and start the scheduler
+    bx      lr
+```
+
+**Walkthrough:**
+
+1. `svc #0` — synchronous exception. R0..xPSR are auto-stacked; LR becomes an EXC_RETURN code.
+2. `SVC_Handler` runs in privileged mode. In a real RTOS this is where the kernel parses the immediate (via the stacked PC), restores the first task's context, and `bx lr` returns into thread mode using PSP. The thread never sees `b .` execute — control flow effectively pivots through the handler.
 
 ## See also
 

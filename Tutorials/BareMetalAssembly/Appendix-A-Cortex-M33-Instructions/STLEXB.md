@@ -16,6 +16,8 @@ STLEXB  <Rd>, <Rt>, [<Rn>]
 
 Byte version of [`STLEX`](STLEX.md). Pairs with [`LDAEXB`](LDAEXB.md).
 
+**When you'd actually use this** closing a byte-wide lock-free RMW that also needs release ordering — a byte spinlock take, an atomic byte refcount step, or a state-machine transition where the new state must publish prior writes. Pairs only with `LDAEXB`. The byte width matters in compact structs and 8-bit lock fields; the ordering guarantee is identical to `STLEX`. Without it, you'd combine `STREXB` with a separate `DMB`, or fall back to disabling interrupts.
+
 ## Operands
 
 | Field  | Type             | Constraints                                            |
@@ -54,6 +56,8 @@ ClearExclusiveMonitors();
 
 ## Example — paired with LDAEXB
 
+### Example 1 — Byte test-and-set with ordering
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -90,6 +94,45 @@ lock:
 3. `stlexb r2, r3, [r0]` — atomic release-store of "1". Sets the lock and gives release ordering wrt anything earlier (none here, but the *next* thread's writes inside the critical section will be ordered by this acquire/release pair).
 4. The critical section follows; it's released with a plain `STLB`.
 5. This is the part that bites people: the lock byte is a `.byte` followed by `.align 2` so the next data is word-aligned — the lock itself doesn't need alignment for `STLEXB`.
+
+### Example 2 — Atomic byte CAS state transition
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ State machine: only transition IDLE(0) → BUSY(1) atomically with ordering.
+    ldr     r0, =state
+    movs    r3, #0                  @ expected = IDLE
+    movs    r4, #1                  @ new      = BUSY
+cas:
+    ldaexb  r1, [r0]                @ acquire + arm
+    cmp     r1, r3
+    bne     not_idle
+    stlexb  r2, r4, [r0]            @ release + commit
+    cmp     r2, #0
+    bne     cas                 @ contention — retry
+    b       done
+not_idle:
+    clrex                           @ wrong state — drop monitor
+done:
+loop:
+    b       loop
+
+    .data
+state:
+    .byte   0
+    .align  2
+```
+
+**Walkthrough:**
+
+1. `LDAEXB` reads the byte state with acquire ordering and arms the monitor.
+2. If we are not in IDLE we drop the reservation with `CLREX` — never issue an unmatched `STLEXB`.
+3. If we are in IDLE, `STLEXB` writes BUSY with release ordering; subsequent code in the BUSY critical section will be observed by other threads only after they see the state byte transition.
 
 ## See also
 

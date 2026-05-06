@@ -16,6 +16,8 @@ LDAB  <Rt>, [<Rn>]
 
 Byte sibling of [`LDA`](LDA.md). Reads one byte, zero-extends, and provides acquire semantics. New in ARMv8-M.
 
+**When you'd actually use this** an 8-bit *ready* or *state* flag is packed into a struct beside the data it gates — `LDAB` reads the byte and fences subsequent loads in one instruction, no separate `DMB` needed. Compilers emit it for C11 acquire-loads of `_Atomic uint8_t`. Common in producer/consumer ring buffers between an ISR and a worker loop, where each slot has a 1-byte *valid* marker. Without `LDAB` you'd need `LDRB` + `DMB ISHLD`, which is more code and locks down ordering more aggressively.
+
 ## Operands
 
 | Field  | Type                 | Constraints                          |
@@ -50,6 +52,8 @@ R[t] = ZeroExtend(MemA_with_acquire[address, 1], 32);
 
 ## Example
 
+### Example 1 — Byte ready-flag acquire-poll
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -82,6 +86,41 @@ payload:
 1. `ldab r2, [r0]` — atomically reads the flag byte with acquire ordering. Zero-extends to 32 bits.
 2. `cmp / beq poll` — spin while the byte is still 0.
 3. `ldr r3, [r1]` — the architecture forbids the CPU from speculating this load *before* the `LDAB` was observed by the rest of the system. This is the part that bites people: the same code with `LDRB` would need a `DMB` to be portable.
+
+### Example 2 — Decode a state byte after acquire
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Read a state-machine byte; only after acquire-load is it safe to read params.
+    ldr     r0, =state
+    ldr     r1, =param_block
+    ldab    r2, [r0]                @ acquire-load the state byte
+    cmp     r2, #2                  @ STATE_RUN == 2?
+    bne     idle
+    ldr     r3, [r1, #0]            @ params associated with STATE_RUN
+idle:
+loop:
+    b       loop
+
+    .data
+    .align  2
+param_block:
+    .word   0
+state:
+    .byte   0
+    .align  2
+```
+
+**Walkthrough:**
+
+1. `LDAB r2, [r0]` acquire-loads the state byte and zero-extends it.
+2. Branching on the value is plain register work; the dependent `LDR` of the parameter block cannot be hoisted above the `LDAB`.
+3. A producer that writes `param_block` first and then `STLB`s the state byte is therefore guaranteed visible to this reader as a consistent snapshot.
 
 ## See also
 

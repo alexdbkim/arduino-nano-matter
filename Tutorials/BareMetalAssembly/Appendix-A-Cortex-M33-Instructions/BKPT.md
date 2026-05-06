@@ -14,6 +14,8 @@
 BKPT #<imm8>           @ imm8 = 0..255, free for the debugger to interpret
 ```
 
+**When you'd actually use this** — `BKPT` is the right tool for assertions and `__builtin_trap()`-style "this should never happen" traps *during development*: with a debugger attached the core halts cleanly and you see the failing line; with no debugger and `DEMCR.MON_EN=0` it escalates to HardFault. Compilers emit it for `__builtin_debugtrap()`, and semihosting libraries use `BKPT #0xAB` as the host-call channel. The trap is debugger-aware, which is also its weakness: a `BKPT` left in production firmware on a board with no debugger crashes every time it executes — for shipping `assert(0)` traps prefer `UDF`, which faults identically with or without a debugger.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -54,6 +56,8 @@ No 32-bit form.
 
 ## Example
 
+### Example 1 — invariant check halts under the debugger
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -83,6 +87,36 @@ loop:
 3. `b fail` — defensive: if execution somehow continues (e.g. debugger steps over it), don't fall through into `ok`.
 
 This is the part that bites people: a `BKPT` left in production firmware on a board with no debugger attached will HardFault every time it executes. Wrap it in `#ifdef DEBUG` or use it only behind genuine assertion failures.
+
+### Example 2 — assert-style runtime check on a global
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ assert(g_state == 1) — halts under the debugger with r1 = bad value
+    ldr     r0, =g_state
+    ldr     r1, [r0]
+    cmp     r1, #1
+    beq     ok
+    bkpt    #0                      @ assert failed: inspect r1 in the debugger
+ok:
+    @ continue with verified invariant
+loop:
+    b   loop
+
+    .data
+    .align 2
+g_state: .word 1
+```
+
+**Walkthrough:**
+
+1. Load the global, compare to expected value.
+2. On mismatch, `bkpt #0` halts the core — under the debugger you immediately see the offending line and `r1` shows the bad value. Without a debugger this becomes a HardFault, which is fine in development but exactly why you don't ship `BKPT` in release builds (use `UDF` for that).
 
 ## See also
 

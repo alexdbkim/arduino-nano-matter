@@ -14,6 +14,8 @@
 VSTR.32 <Sd>, [<Rn>{, #±<imm>}]
 ```
 
+**When you'd actually use this** — VSTR writes one FPU register to memory: store a filter output, push a result back into a `volatile float` field for an ISR to consume, or update one slot of a lookup table. Compilers emit it for every store of a `float` lvalue. For multiple consecutive registers use VSTM — VSTR has no writeback form and handles one register at a time.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ VSTR never updates APSR or FPSCR.
 
 ## Example
 
+### Example 1 — compute then write three floats
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -90,6 +94,44 @@ buf:
 5. `vstr.32 s1, [r0, #4]` / `s2, [r0, #8]` — same, with positive immediate offsets. Negative offsets are also legal (`[r0, #-4]`) within ±1020.
 
 This is the part that bites people: VSTR's immediate offset is *scaled by 4* in the encoding, so the assembler will reject odd or unaligned values (`#5`, `#1024`, …) — for those, materialise the address in a core register or use VSTM with writeback.
+
+### Example 2 — write a filter output via a negative immediate offset
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VSTR demo 2: walking pointer with negative offset to back-fill an earlier buffer slot.
+    ldr      r0, =buf
+    adds     r0, r0, #4            @ R0 -> buf[1]
+    vmov.f32 s0, #7.5
+    vstr.32  s0, [r0, #-4]         @ buf[0] = 7.5 (write at R0 - 4)
+    vmov.f32 s1, #8.5
+    vstr.32  s1, [r0]              @ buf[1] = 8.5
+    vmov.f32 s2, #9.5
+    vstr.32  s2, [r0, #4]          @ buf[2] = 9.5
+loop:
+    b   loop
+
+    .section .bss
+    .align 2
+buf:
+    .space 12
+```
+
+**Walkthrough:**
+
+1. `ldr r0, =buf` then `adds r0, r0, #4` — set `R0` to `buf[1]`. This mirrors how a streaming filter loop typically maintains a pointer that *moves* through a sample buffer.
+2. `vstr.32 s0, [r0, #-4]` — store at `R0 - 4 = buf[0]`. Negative immediate offsets are first-class on VSTR (range `±1020` in steps of 4) — useful for back-fill or writing to the previous element of a struct without a second pointer.
+3. `vstr.32 s1, [r0]` and `vstr.32 s2, [r0, #4]` — current and next slot. After this sequence `buf` holds `7.5, 8.5, 9.5`.
+4. `loop: b loop` — park.
+
+Compared to building the address with `subs`/`adds`+`vstr`, the immediate-offset form saves an instruction *per* store. That matters in tight inner loops.
 
 ## See also
 

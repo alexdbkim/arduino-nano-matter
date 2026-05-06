@@ -14,6 +14,8 @@
 B{<cond>}   <label>
 ```
 
+**When you'd actually use this**: `B` is the bread-and-butter branch — every C `if`, `while`, `for`, and `goto` becomes a `CMP`/`TST` followed by a conditional `Bcc`, with the unconditional `B` form playing the role of "jump to bottom of loop" or "fall-through skip" or the parking spin at the end of `main`. There's almost no firmware function that doesn't contain at least one. The thing that bites: range. The narrow `B<cond>` (T1) only reaches ±256 bytes, so once a loop body grows the assembler has to escalate to `.W` (32-bit) to keep the target in reach — if you ever see a "branch out of range" error, that's the fix.
+
 `<cond>` is one of: `EQ NE CS HS CC LO MI PL VS VC HI LS GE LT GT LE AL`.
 `HS` is an alias for `CS`; `LO` is an alias for `CC`. `AL` (always) is the default and may be omitted.
 
@@ -78,6 +80,8 @@ The assembler picks the narrowest encoding that reaches; force 32-bit with the `
 
 ## Example
 
+### Example 1 — conditional countdown loop
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -102,6 +106,33 @@ loop:
 3. `bne count_down` — re-enters the loop while `Z == 0`; falls through when `r0` hit zero.
 4. `movs r1, #0xAA` — runs exactly once, proving the conditional branch terminated.
 5. `b loop` — unconditional branch (the parking spin you see in every example).
+
+### Example 2 — signed forward branch
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    movs    r0, #-3
+    cmp     r0, #0
+    blt     .Lneg           @ forward branch when signed less-than
+    movs    r1, #1          @ taken when r0 >= 0
+    b       loop
+.Lneg:
+    movs    r1, #2          @ taken when r0 < 0
+loop:
+    b       loop
+```
+
+**Walkthrough:**
+
+1. `cmp r0, #0` — sets `N` (and clears `Z`) because `-3` is negative.
+2. `blt .Lneg` — signed less-than branch (`N != V`). Forward jump skips the non-negative arm.
+3. `movs r1, #2` — runs only on the negative path; `r1` ends as 2.
+4. `b loop` — unconditional branch into the parking spin; demonstrates the no-condition form.
 
 ## See also
 

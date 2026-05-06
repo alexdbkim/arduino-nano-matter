@@ -14,6 +14,8 @@
 SEV
 ```
 
+**When you'd actually use this** — `SEV` is the producer half of the `WFE`/`SEV` rendezvous: after publishing a value (and a `DSB` so the store is globally visible), `SEV` sets the Event Register on every core, waking any consumer parked in `WFE`. On a single-core M33 the multi-core wake is moot, but `SEV` is still useful inside ISRs to kick a foreground loop that's idling in `WFE`. Pair it with an STREX-style atomic publish so the woken waiter actually sees fresh state. Note `SEV` also sets the *local* Event Register, so a `SEV` immediately followed by `WFE` is a no-op — that's deliberately how you "consume any stale event" before entering a real wait.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -52,6 +54,8 @@ Never updates flags.
 
 ## Example
 
+### Example 1 — wake a WFE consumer after publishing a flag
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -79,6 +83,42 @@ g_flag: .word 0
 3. `sev` — sets the Event Register everywhere; any consumer parked in `WFE` returns.
 
 On the single-core M33 in the Nano Matter, SEV is most useful inside ISRs to kick a foreground loop that's parked in `WFE`, or paired with `SEVONPEND` for low-power polling. Note `SEV` also sets the *local* Event Register — calling `SEV` then `WFE` immediately is a no-op.
+
+### Example 2 — payload + ready-flag publish, then SEV
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Producer pattern: write payload, write ready flag, SEV the waiter
+    ldr     r0, =g_payload
+    movs    r1, #0x55
+    str     r1, [r0]                @ payload first
+    dmb                             @ payload visible before flag
+    ldr     r2, =g_ready
+    movs    r3, #1
+    str     r3, [r2]                @ publish flag
+    dsb                             @ flag globally observable before SEV
+    sev                             @ wake the WFE consumer
+loop:
+    b   loop
+
+    .data
+    .align 2
+g_payload: .word 0
+g_ready:   .word 0
+```
+
+**Walkthrough:**
+
+1. `str r1, [r0]` — payload write.
+2. `dmb` — orders the payload before the flag for any observer that polls the flag and then reads the payload.
+3. `str r3, [r2]` — flag flip.
+4. `dsb` — make sure the flag write is *complete* (not just ordered) before signalling.
+5. `sev` — sets the Event Register; a consumer in `wfe` wakes and reads the now-visible payload. Without the `dmb`/`dsb` pair the consumer can wake but read stale or partial state.
 
 ## See also
 

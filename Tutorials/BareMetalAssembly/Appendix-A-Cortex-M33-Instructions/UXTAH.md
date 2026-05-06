@@ -14,6 +14,8 @@
 UXTAH  <Rd>, <Rn>, <Rm>{, ROR #<amount>}
 ```
 
+**When you'd actually use this** is the unsigned counterpart of `SXTAH`: a running 32-bit sum of *unsigned* halfwords — typical sources are 12-/16-bit ADC samples, unsigned audio levels, or per-row pixel sums. One `UXTAH` replaces `UXTH tmp, x` + `ADD acc, acc, tmp`, and the `ROR #16` form lets you grab the top halfword of a packed pair with no separate shift. Use it any time you're tempted to write `LDRH` + `ADD` in a tight loop and the source halfword can't be negative.
+
 Take the bottom halfword of `Rm` (after an optional rotate), zero-extend to 32 bits, add to `Rn`. The unsigned cousin of `SXTAH`.
 
 ## Operands
@@ -57,6 +59,8 @@ Never updates APSR.
 
 ## Example
 
+### Example 1 — summing two packed unsigned halfwords
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -80,6 +84,40 @@ loop:
 3. Second `uxtah ..., ror #16` — rotates `r0` so its top half lands in [15:0], adds `0xC000` = 49152. Final `r1` = 53812. No sign nonsense, no overflow until the running total exceeds 2^32.
 
 Use this for unsigned ADC, RGB component summing, or any halfword stream where values are guaranteed non-negative.
+
+### Example 2 — sliding-window sum of an unsigned ADC stream
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Walk a buffer of unsigned 16-bit ADC samples (e.g. 12-bit ADC
+    @ readings zero-extended) and build a window sum. Divide by N
+    @ afterwards for the mean.
+    ldr     r0, =adc_buf
+    movs    r1, #4               @ window length
+    movs    r2, #0               @ running unsigned sum
+1:
+    ldrh    r3, [r0], #2         @ next 16-bit sample (zero-extended by LDRH)
+    uxtah   r2, r2, r3           @ accumulate as unsigned halfword
+    subs    r1, r1, #1
+    bne     1b
+loop:
+    b   loop
+
+    .balign 2
+adc_buf:
+    .hword 0x0FFF, 0x0800, 0x0AAA, 0x0123    @ 4095 + 2048 + 2730 + 291 = 9164
+```
+
+**Walkthrough:**
+
+1. `LDRH` already zero-extends so a plain `ADD` would also work here — what `UXTAH` buys you is the `ROR #16` form when samples arrive packed two-per-word, and stylistic intent ("treat this halfword as unsigned, no funny business").
+2. After the loop `r2 = 9164`, ready to be divided by 4 to get the unsigned mean. No risk of sign-extension surprises.
+3. Swap to `SXTAH` the moment any sample can be negative (e.g. signed sensor data) — it's the same shape but the right answer.
 
 ## See also
 

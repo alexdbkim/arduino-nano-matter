@@ -14,6 +14,8 @@
 UASX <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** — `UASX` is the unsigned, non-saturating sibling of `UQASX`. The cross pattern (`Rd[hi] = Rn[hi] + Rm[lo]`, `Rd[lo] = Rn[lo] − Rm[hi]`) is the shape behind FFT butterflies, complex multiplication, and 2D rotate-and-add transforms in graphics. As with the rest of the family, **`APSR.GE` is set per halfword lane** — top two bits for the high result (carry-out of the add), bottom two for the low (no-borrow of the sub) — so a `SEL` immediately after can blend lanes based on which one carried/borrowed. That `GE`+`SEL` pairing is what makes packed conditional operations cheap; without it you'd be issuing scalar compares and branches.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -58,6 +60,8 @@ There is no 16-bit Thumb encoding for this instruction; the assembler always emi
 
 ## Example
 
+### Example 1 — Cross add/sub on packed halfwords
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -80,6 +84,32 @@ loop:
 1. The two `movw`/`movt` pairs build 32-bit packed operands in `r1` and `r2`.
 2. `uasx r0, r1, r2` exchanges the halves of `r2` first, then computes `r0[hi] = r1[hi] + r2[lo]` and `r0[lo] = r1[lo] − r2[hi]`.
 3. `APSR.GE[3:2]` reflects the high-half result, `GE[1:0]` the low-half result.
+
+### Example 2 — 2D vector "rotate-and-add" step
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Graphics: combine a 2D vector (x,y) packed in r1 with deltas (dx,dy) packed in r2,
+    @ producing (x+dy, y−dx) — one step of a small rotate-and-translate transform.
+    movw    r1, #0x0040              @ y = 0x0040
+    movt    r1, #0x0080              @ x = 0x0080
+    movw    r2, #0x0003              @ dy = 3 (low half of r2)
+    movt    r2, #0x0002              @ dx = 2 (high half of r2)
+    uasx    r0, r1, r2               @ r0[hi]=x + dy = 0x0083, r0[lo]=y − dx = 0x003E
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. We pack a vector and its delta into halfword pairs so one SIMD op moves both components at once.
+2. `UASX` swaps the halves of `r2` so `dy` is added to `x` (high lane) and `dx` is subtracted from `y` (low lane) — exactly the lane-cross you need for `+90°` rotation in 2D.
+3. `APSR.GE` carries per-lane carry/borrow info: useful if a follow-up `SEL` swaps in a bounding-box clamp value when a coordinate wraps.
 
 ## See also
 

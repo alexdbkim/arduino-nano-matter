@@ -16,6 +16,8 @@ STREXH  <Rd>, <Rt>, [<Rn>]
 
 Half-word sibling of [`STREX`](STREX.md). Pairs with [`LDREXH`](LDREXH.md).
 
+**When you'd actually use this** closing a 16-bit atomic RMW — a half-word ticket counter, a compact 16-bit event-flags word, or a 16-bit refcount. Pairs with `LDREXH`. Half-word atomicity is preferred when the field is packed into a struct or shares a cache line with its data. Without `STREXH` you'd widen to 32 bits or disable interrupts globally — both worse for code density and IRQ latency.
+
 ## Operands
 
 | Field  | Type                 | Constraints                                            |
@@ -57,6 +59,8 @@ ClearExclusiveMonitors();
 
 ## Example — paired with LDREXH
 
+### Example 1 — Atomic-OR a 16-bit status
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -88,6 +92,40 @@ status:
 2. `orrs r1, r1, r4` — set the desired bit in a register (the `s` form clobbers flags; safe, since the loop only checks R2 afterwards).
 3. `strexh r2, r1, [r0]` — atomic commit. The store stores only the low 16 bits of R1.
 4. Retry on failure. This is the part that bites people: an exception between `LDREXH` and `STREXH` will clear the monitor — even if the exception handler doesn't touch `status`. Always assume retries can happen.
+
+### Example 2 — Clear lowest set bit (16-bit)
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Atomically clear the lowest set bit in a 16-bit bitmap (x & (x - 1)).
+    ldr     r0, =bitmap
+clr:
+    ldrexh  r1, [r0]                @ arm + read half-word
+    subs    r3, r1, #1              @ x - 1
+    ands    r1, r1, r3              @ x & (x-1) clears lowest set bit
+    uxth    r1, r1
+    strexh  r2, r1, [r0]            @ commit
+    cmp     r2, #0
+    bne     clr                 @ contention — retry
+loop:
+    b       loop
+
+    .data
+    .align  2
+bitmap:
+    .hword  0x00B4
+```
+
+**Walkthrough:**
+
+1. `LDREXH` arms the half-word monitor and reads the bitmap.
+2. `x & (x - 1)` is the classic bit-twiddle that clears only the lowest set bit; both operations are register-side.
+3. `STREXH` commits the new value atomically; `CBNZ` retries on monitor loss. Half-word alignment is mandatory and provided by `.align 2`.
 
 ## See also
 

@@ -15,6 +15,8 @@ ORR{S}{<cond>} {<Rd>,} <Rn>, <Rm>{, <shift>}
 ORR{S}{<cond>} {<Rd>,} <Rn>, #<const>
 ```
 
+**When you'd actually use this** is the **set-bits half** of read-modify-write on peripheral registers — to enable a clock, raise a GPIO output, or unmask an interrupt: `ldr r1, [r0]; orr r1, r1, #ENABLE; str r1, [r0]`. It's also how you reassemble a config word from individually-prepared sub-fields (each shifted into place with `LSL`) into one final register write. Pair it with `BIC` for the canonical "clear the old bits, then OR in the new ones" idiom on multi-bit fields.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -61,6 +63,8 @@ Flags only update with `ORRS`. C is the shifter carry-out, not a real arithmetic
 
 ## Example
 
+### Example 1 — build a 32-bit constant and set a flag
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -83,6 +87,26 @@ loop:
 1. `movw`/`movt` build a full 32-bit constant — not strictly an `ORR`, but the idiomatic way to load it.
 2. `orr r2, r0, r1, lsl #8` — shows the optional inline shift: OR in `r1 << 8`. This is the bread-and-butter pattern for "set bit N" in MMIO registers.
 3. `orrs ... #0x80000000` — same operation but updates flags so you could branch on the result's sign.
+
+### Example 2 — enable two clock-gate bits at once
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Enable two clock gates (USART0 = bit 3, TIMER1 = bit 7) in one RMW.
+    ldr     r1, =0x40000020        @ pretend CMU_CLOCK_ENABLE register
+    ldr     r0, [r1]
+    orr     r0, r0, #((1 << 3) | (1 << 7))   @ set both bits at once
+    str     r0, [r1]
+loop:
+    b   loop
+```
+
+**Walkthrough:** A single `ORR` with a composite mask is cheaper than two separate `ORR`s and avoids a second store back to the peripheral. `0x88` fits trivially as a Thumb-2 modified immediate, so the whole sequence is just three instructions plus the address load.
 
 ## See also
 

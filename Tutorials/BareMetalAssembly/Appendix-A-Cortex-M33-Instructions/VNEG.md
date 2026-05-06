@@ -16,6 +16,8 @@ FPv5-SP only. `.F64` form unavailable.
 VNEG.F32 <Sd>, <Sm>            @ Sd = -Sm  (sign bit flipped)
 ```
 
+**When you'd actually use this** is whenever you need `−x` cheaply — flipping the sign of an FIR/IIR coefficient that's stored positive, negating a velocity to invert a motor command, or pre-negating a term so you can use `VADD` instead of `VSUB` in a tight loop. Like `VABS`, it's a single sign-bit toggle (one cycle, never traps on NaN). If a `VNEG` is followed immediately by a multiply, prefer `VNMUL` — it fuses the negate with the multiply for free. The CPACR rule still bites first: enable `CP10/CP11` before executing any V-instruction or you'll HardFault out of the gate.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -53,6 +55,8 @@ APSR untouched. FPSCR untouched.
 
 ## Example
 
+### Example 1 — `acc -= x` via negate-then-add
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -74,6 +78,32 @@ loop:
 
 1. `vneg.f32 s2, s0` — toggle sign in one cycle.
 2. `vadd.f32 s1, s1, s2` — fold negated value into accumulator. If you're doing this often, prefer `VFMS`/`VNMUL` to fuse the negate.
+
+### Example 2 — flip the sign of a stored-positive IIR feedback coefficient
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ VNEG demo 2: y[n] += -a1 * y[n-1]   (a1 stored positive in tables)
+    @ S0 = a1 (positive),  S1 = y[n-1],  S2 = y[n] accumulator
+    vneg.f32 s3, s0          @ S3 = -a1
+    vmul.f32 s4, s3, s1      @ S4 = -a1 * y[n-1]
+    vadd.f32 s2, s2, s4      @ y[n] += -a1 * y[n-1]
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `vneg.f32 s3, s0` — one-cycle sign flip; the original positive `a1` in `S0` is preserved for any other tap that needs it.
+2. `vmul.f32` then `vadd.f32` complete the IIR feedback term.
+3. The whole sequence collapses to a single `vfms.f32 s2, s0, s1` (Sd −= Sn*Sm) if you want one rounding and one cycle — but that loses the explicit `−a1` value, which the example keeps visible for clarity.
 
 ## See also
 

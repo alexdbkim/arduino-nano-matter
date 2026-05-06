@@ -14,6 +14,9 @@
 VRINTR{<cond>}.F32   <Sd>, <Sm>
 ```
 
+**When you'd actually use this** is when you want C `nearbyint`-style behaviour: round per the current `FPSCR.RMode`, *without* setting the inexact flag — so the rounding step doesn't pollute a later check of `FPSCR.IXC` that's tracking some *other* operation in the same routine. Reach for `VRINTR` when you've programmed `FPSCR` to a non-default mode for an algorithm but you're also tracking inexact for a different reason in the same loop. Without it you'd save/restore `FPSCR.IXC` around the rounding step or accept false-positive inexact reports.
+
+
 The IEEE-754 `roundToIntegral` operation that **does not** signal inexact —
 i.e. `nearbyint`. Compare [VRINTX](VRINTX.md), which does the same rounding
 but sets `FPSCR.IXC`.
@@ -55,6 +58,9 @@ if SNaN(Sm) then FPSCR.IOC = 1
 
 ## Example
 
+
+### Example 1 — nearbyint(): round per FPSCR but don't pollute IXC
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -86,6 +92,34 @@ loop:
 Use `VRINTR` when you want library-quality `nearbyint`/`rintf`-without-FE_INEXACT
 semantics, or when you're rounding inside a tight loop and don't want a stray
 inexact flag confusing later checks.
+
+### Example 2 — rounding inside a tight loop without dirtying inexact
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .fpu    fpv5-sp-d16
+    .global  loop_round
+    .thumb_func
+loop_round:
+    @ Prerequisite: CPACR.CP10/CP11 = 0b11 (FPU enabled)
+    @ r0 = pointer to N floats, r1 = N; round each in place per FPSCR.RMode
+1:  cbz        r1, 2f
+    vldr.f32   s0, [r0]
+    vrintr.f32 s0, s0             @ round per FPSCR, IXC untouched
+    vstr.f32   s0, [r0]
+    adds       r0, r0, #4
+    subs       r1, r1, #1
+    b          1b
+2:  bx         lr
+```
+
+**Walkthrough:**
+
+1. Stream `N` floats through a loop, rounding each one in place.
+2. `vrintr.f32 s0,s0` honours whatever rounding mode the caller has programmed into `FPSCR.RMode`, but does **not** set `FPSCR.IXC` — so a higher-level routine that's separately tracking inexact for a different operation isn't disturbed.
+3. Use [VRINTX](VRINTX.md) instead if you actually *want* to know whether the rounding changed any value.
 
 ## See also
 

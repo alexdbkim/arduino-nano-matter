@@ -14,6 +14,8 @@
 SMULWT <Rd>, <Rn>, <Rm>
 ```
 
+**When you'd actually use this** is the top-half companion to `SMULWB`: Q31 × Q15-from-the-top-half, with the implicit `>>16` keeping the result in Q31. With two Q15 coefficients packed as `[T|B]` per word (top half = bits 31:16, bottom = bits 15:0), `SMULWB` consumes the bottom coefficient and `SMULWT` consumes the top — picking either with a one-character suffix. The killer use is per-channel stereo Q31 gain where one packed word holds `[right_gain | left_gain]`. Without `SMULWT` you'd `LSR #16`, sign-extend, full `SMULL`, then `LSR #16` again — four instructions versus one.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -51,6 +53,8 @@ No 16-bit encoding exists. This is a Thumb-2 / DSP-extension instruction only.
 
 ## Example
 
+### Example 1 — Q31 × Q15 (top half), Q31 result
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -70,6 +74,29 @@ loop:
 
 1. Same as `SMULWB` but takes the coefficient from `Rm[31:16]`.
 2. Pairs neatly with `SMULWB` when you've packed two Q15 coefficients into one register — pick either with the suffix.
+
+### Example 2 — Right-channel gain from a packed stereo gain word
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Volume word packs [right_gain | left_gain] (each Q15) — top in bits 31:16,
+    @ bottom in bits 15:0. Apply right_gain to a Q31 right-channel sample.
+    ldr     r1, =0x60000000     @ right Q31 sample = 0.75
+    ldr     r2, =0x40002000     @ r_gain=0x4000 (top), l_gain=0x2000 (bottom)
+    smulwt  r0, r1, r2          @ r0 = (sample * r_gain) >> 16, stays Q31
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `T` selects bits 31:16 of `r2` (`r_gain = 0x4000` = 0.5 Q15); the implicit `>>16` keeps the Q31 alignment.
+2. Process the left channel by re-running the same instruction as `SMULWB` on the same `r2` — one packed gain word feeds both channels with zero reloads.
 
 ## See also
 

@@ -16,6 +16,8 @@ RRX{S}{<cond>} {<Rd>,} <Rm>
 
 Rotate the 33-bit concatenation `{C : Rm}` right by exactly **one** position. The old C becomes the new bit 31; the old bit 0 becomes the new C (when `S` is set).
 
+**When you'd actually use this** is the **second instruction of a 64-bit (or wider) right shift** — there is no other way on M-profile to slide the carry bit into bit 31 of the next register. After `LSRS`/`ASRS` shifts the high word and captures the dropped bit in C, `RRX` shifts the low word and pulls that C in. Outside multi-word shifts it shows up only in obscure bit-stream packing tricks; for ordinary 32-bit rotates, reach for `ROR` instead.
+
 ## The 33-bit rotate, drawn out
 
 ```
@@ -81,6 +83,8 @@ if ConditionPassed() then
 
 ## Example
 
+### Example 1 — 64-bit unsigned right shift
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -105,6 +109,27 @@ loop:
 2. `rrx r0, r0` — shifts the low word right by one, dropping that captured C into bit 31. The combined effect is a clean 64-bit right shift.
 
 This is the part that bites people: the `S`-suffix dance is mandatory. If you forget `LSRS` and write `LSR`, C still holds whatever it did before and `RRX` will rotate in the **wrong** bit. Multi-word shifts are a leading source of subtle bugs in hand-written assembler and crypto code.
+
+### Example 2 — signed 64-bit halve
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    @ Halve a signed 64-bit value (-1000) stored as r1:r0 = high:low.
+    ldr     r1, =0xFFFFFFFF        @ high word of -1000
+    ldr     r0, =0xFFFFFC18        @ low word of -1000
+    asrs    r1, r1, #1             @ signed shift of high; bit 0 -> C
+    rrx     r0, r0                 @ shift low right, pulling C into bit 31
+    @ now r1:r0 = -500 = 0xFFFFFFFF:0xFFFFFE0C
+loop:
+    b   loop
+```
+
+**Walkthrough:** `ASRS` (not `LSRS`) keeps the sign in place when shifting the high word, while still depositing bit 0 into C. `RRX` then slides that bit into bit 31 of the low word — completing a signed 64-bit `>> 1`. Using `LSRS` here would zero-fill the high word, turning a small negative value into a large positive one.
 
 ## See also
 

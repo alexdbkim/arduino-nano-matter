@@ -14,6 +14,8 @@
 MSR  <SYSm>, <Rn>
 ```
 
+**When you'd actually use this** is whenever you need to write a CPU special register: enter a critical section by raising `PRIMASK` or `BASEPRI`, switch the active stack via `CONTROL.SPSEL`, drop privilege with `CONTROL.nPRIV`, or restore an inbound thread's `PSP` during a context switch. `CPSID i` is shorter for a blanket interrupt disable, but `MSR BASEPRI, rN` is the only way to mask interrupts *below* a priority threshold while still letting higher-priority ones through. The classic gotcha: forgetting the trailing `ISB` after a `CONTROL`/`PRIMASK`/`BASEPRI` write — already-prefetched instructions can otherwise execute under stale assumptions and produce non-deterministic bugs.
+
 ## Operands
 
 | Field | Type | Constraints |
@@ -55,6 +57,8 @@ No 16-bit form.
 
 ## Example
 
+### Example 1 — Drop to unprivileged on PSP
+
 ```asm
     .syntax unified
     .cpu    cortex-m33
@@ -81,6 +85,33 @@ loop:
 4. `movs r1, #0` — first instruction unambiguously executed in the new context.
 
 This is the part that bites people: forgetting `ISB` after `MSR CONTROL`/`MSR PRIMASK`/`MSR BASEPRI` produces non-deterministic bugs that depend on prefetch state.
+
+### Example 2 — Critical section via PRIMASK save/restore
+
+```asm
+    .syntax unified
+    .cpu    cortex-m33
+    .thumb
+    .global  reset_handler
+    .thumb_func
+reset_handler:
+    mrs     r0, primask         @ snapshot the current mask
+    cpsid   i                   @ disable IRQs (PRIMASK = 1)
+    @ ---- critical section: shared-state work goes here ----
+    movs    r1, #0
+    @ ---- end critical section ----
+    msr     primask, r0         @ restore exactly what we found
+    isb                         @ flush prefetch under stale mask
+loop:
+    b   loop
+```
+
+**Walkthrough:**
+
+1. `mrs r0, primask` — snapshot before changing, so a nested call can't accidentally re-enable interrupts the outer caller had disabled.
+2. `cpsid i` — shorter than `mov r2,#1; msr primask, r2` for the same effect.
+3. `msr primask, r0` — restore the saved value rather than blindly enabling. This is the only safe pattern for nestable critical sections.
+4. `isb` — without it the very next instruction may already have been prefetched under the *disabled* mask and could observe stale interrupt state.
 
 ## See also
 
